@@ -26,17 +26,26 @@ VALID_PRICELIST_SHEETS = [
     "SER OTH CON",
 ]
 
+
 PRICE_SEGMENTS = [
     (0, 1_000_000, "< 1 JUTA"),
-    (1_000_000, 1_500_000, "1 - 1.5 JUTA"),
-    (1_500_000, 2_000_000, "1.5 - 2 JUTA"),
-    (2_000_000, 2_500_000, "2 - 2.5 JUTA"),
-    (2_500_000, 3_000_000, "2.5 - 3 JUTA"),
-    (3_000_000, 4_000_000, "3 - 4 JUTA"),
-    (4_000_000, 5_000_000, "4 - 5 JUTA"),
-    (5_000_000, 10_000_000, "5 - 10 JUTA"),
-    (10_000_000, np.inf, "10 JUTA - UP"),
+    (1_000_000, 1_500_000, "1 – 1.5 JUTA"),
+    (1_500_000, 2_000_000, "1.5 – 2 JUTA"),
+    (2_000_000, 2_500_000, "2 – 2.5 JUTA"),
+    (2_500_000, 3_000_000, "2.5 – 3 JUTA"),
+    (3_000_000, 4_000_000, "3 – 4 JUTA"),
+    (4_000_000, 5_000_000, "4 – 5 JUTA"),
+    (5_000_000, 7_000_000, "5 – 7 JUTA"),
+    (7_000_000, 10_000_000, "7 – 10 JUTA"),
+    (10_000_000, 12_500_000, "10 – 12.5 JUTA"),
+    (12_500_000, 15_000_000, "12.5 – 15 JUTA"),
+    (15_000_000, 20_000_000, "15 – 20 JUTA"),
+    (20_000_000, 25_000_000, "20 – 25 JUTA"),
+    (25_000_000, 30_000_000, "25 – 30 JUTA"),
+    (30_000_000, 40_000_000, "30 – 40 JUTA"),
+    (40_000_000, float("inf"), "40 JUTA – UP"),
 ]
+
 
 st.markdown(
     """
@@ -430,6 +439,31 @@ if selected_segments:
 if filtered.empty:
     st.warning("Data kosong setelah filter diterapkan.")
     st.stop()
+
+
+# =========================================================
+# SEGMENTATION CARDS
+# =========================================================
+
+def build_segment_table(df):
+    df["SEGMENT"] = df["PRICE"].apply(price_segment)
+    seg = df.groupby(["SEGMENT", "DIVISION"])["QTY"].sum().unstack().fillna(0)
+    return seg.reset_index()
+
+def build_brand_table(df):
+    brand = df.groupby(["BRAND", "DIVISION"])["QTY"].sum().unstack().fillna(0)
+    return brand.reset_index().sort_values(by="DIV03", ascending=False).head(10)
+
+left, right = st.columns(2)
+
+with left:
+    st.markdown("### Segmentasi Harga")
+    st.dataframe(build_segment_table(filtered), use_container_width=True)
+
+with right:
+    st.markdown("### Segmentasi Brand")
+    st.dataframe(build_brand_table(filtered), use_container_width=True)
+
 
 st.markdown("### Tabel Utama Analisa")
 st.caption("Error tadi terjadi karena hasil pivot masih berbentuk MultiIndex, lalu digabung dengan kolom biasa saat merge. Di file ini bagian itu sudah dirapikan sebelum merge.")
