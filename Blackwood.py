@@ -397,12 +397,13 @@ def render_exact_header_table(df: pd.DataFrame):
     st.markdown("".join(html), unsafe_allow_html=True)
 
 
-def render_main_table_aggrid(df: pd.DataFrame):
+def render_main_table_aggrid(df: pd.DataFrame, master_df: pd.DataFrame):
     display_df = df.copy()
 
     # Tambahkan kolom PRODUCT dan BRAND di depan tabel utama
     product_brand = (
-        filtered[["KODEBARANG", "PRODUCT_FINAL", "BRAND"]]
+        master_df[["KODEBARANG", "PRODUCT_FINAL", "BRAND"]]
+        .dropna(subset=["KODEBARANG"])
         .drop_duplicates(subset=["KODEBARANG"], keep="first")
         .copy()
     )
@@ -425,27 +426,18 @@ def render_main_table_aggrid(df: pd.DataFrame):
         editable=False,
     )
 
-    # Kolom utama dibuat lebih ramping supaya enak dibaca cepat
     gb.configure_column("KODEBARANG", header_name="KODEBARANG", minWidth=120, width=140, pinned="left")
     gb.configure_column("PRODUCT", header_name="PRODUCT", minWidth=90, width=110, pinned="left")
     gb.configure_column("BRAND", header_name="BRAND", minWidth=90, width=100, pinned="left")
     gb.configure_column("SPESIFIKASI", header_name="SPESIFIKASI", minWidth=220, width=280)
     gb.configure_column("M3", header_name="M3", type=["numericColumn"], minWidth=80, width=90)
 
-    # Kolom period/division dibuat kecil dan dinamis
     for col in display_df.columns:
         if col not in ["KODEBARANG", "PRODUCT", "BRAND", "SPESIFIKASI", "M3"]:
-            gb.configure_column(
-                col,
-                minWidth=78,
-                width=82,
-                type=["numericColumn"],
-            )
+            gb.configure_column(col, minWidth=78, width=82, type=["numericColumn"])
 
     gb.configure_grid_options(
         animateRows=False,
-        suppressColumnVirtualisation=False,
-        suppressRowVirtualisation=False,
         enableCellTextSelection=True,
         ensureDomOrder=True,
         rowHeight=30,
@@ -463,7 +455,7 @@ def render_main_table_aggrid(df: pd.DataFrame):
         columns_auto_size_mode=ColumnsAutoSizeMode.NO_AUTOSIZE,
         theme="streamlit",
         enable_enterprise_modules=False,
-        reload_data=False,
+        reload_data=True,
     )
 
     return display_df
@@ -478,17 +470,6 @@ st.sidebar.header("Upload File")
 mplssr_file = st.sidebar.file_uploader("Upload MPLSSR", type=["xlsx", "xls"])
 pricelist_file = st.sidebar.file_uploader("Upload Pricelist", type=["xlsx", "xls"])
 
-st.sidebar.markdown("---")
-st.sidebar.write("**Rules:**")
-st.sidebar.caption("""- QTY: MPLSSR
-- STOK: Pricelist
-- Harga: kolom M3
-- MPLSSR: header row 2, data row 7
-- Pricelist: header row 2, data row 6
-- 05 OLR cek kode area row 3
-- Sheet LAPTOP hapus COMING s/d END COMING
-- Gunakan tombol PROSES setelah pilih filter
-- Filter range harga di sidebar dihapus""")
 
 if not mplssr_file or not pricelist_file:
     st.info("Silakan upload file MPLSSR dan Pricelist.")
@@ -513,14 +494,10 @@ with st.sidebar:
         process_clicked = st.form_submit_button("PROSES", use_container_width=True)
 
 if "filter_submitted" not in st.session_state:
-    st.session_state["filter_submitted"] = False
+    st.session_state["filter_submitted"] = True
 
 if process_clicked:
     st.session_state["filter_submitted"] = True
-
-if not st.session_state["filter_submitted"]:
-    st.info("Silakan pilih filter terlebih dulu, lalu klik PROSES.")
-    st.stop()
 
 filtered = master.copy()
 if selected_products:
@@ -611,7 +588,7 @@ st.markdown("### Tabel Utama Analisa")
 st.caption("Tabel utama sekarang memakai AgGrid, jadi bisa filter, sort, resize kolom, dan tampil lebih mirip Excel.")
 
 main_table = build_main_table(filtered)
-main_table_export = render_main_table_aggrid(main_table)
+main_table_export = render_main_table_aggrid(main_table, filtered)
 
 out = io.BytesIO()
 with pd.ExcelWriter(out, engine="openpyxl") as writer:
