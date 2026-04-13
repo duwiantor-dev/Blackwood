@@ -399,7 +399,7 @@ def render_exact_header_table(df: pd.DataFrame):
 # UI
 # =========================================================
 st.title("Dashboard Analisa Sales vs Stock")
-st.caption("QTY diambil dari MPLSSR. STOK dan harga diambil dari Pricelist.")
+st.caption("QTY diambil dari MPLSSR. STOK dan harga diambil dari Pricelist. Segmentasi menampilkan QTY per 7 DAY, 14 DAY, dan 30 DAY.")
 
 st.sidebar.header("Upload File")
 mplssr_file = st.sidebar.file_uploader("Upload MPLSSR", type=["xlsx", "xls"])
@@ -478,6 +478,24 @@ def build_segment_table(df):
     seg.columns = ["SEGMENT", "DIV 03", "DIV 04", "DIV 05"]
     return seg
 
+def build_segment_period_table(df):
+    tmp = df.copy()
+    tmp["SEGMENT"] = tmp["PRICE"].apply(price_segment)
+    piv = tmp.pivot_table(
+        index="SEGMENT",
+        columns="PERIOD",
+        values="QTY",
+        aggfunc="sum",
+        fill_value=0,
+    ).reset_index()
+    for p in PERIODS:
+        if p not in piv.columns:
+            piv[p] = 0
+    piv = piv[["SEGMENT", "7DAY", "14DAY", "30DAY"]].copy()
+    piv = piv.sort_values("SEGMENT", key=lambda s: s.map(segment_sort_key)).reset_index(drop=True)
+    piv.columns = ["SEGMENT", "7 DAY", "14 DAY", "30 DAY"]
+    return piv
+
 def build_brand_table(df):
     brand = df.groupby(["BRAND", "DIVISION"])["QTY"].sum().unstack().fillna(0).reset_index()
     for div in DIVISIONS:
@@ -487,6 +505,23 @@ def build_brand_table(df):
     brand["TOTAL"] = brand[["DIV03", "DIV04", "DIV05"]].sum(axis=1)
     brand = brand.sort_values(["TOTAL", "BRAND"], ascending=[False, True]).head(10).drop(columns=["TOTAL"])
     brand.columns = ["BRAND", "DIV 03", "DIV 04", "DIV 05"]
+    return brand
+
+def build_brand_period_table(df):
+    brand = df.pivot_table(
+        index="BRAND",
+        columns="PERIOD",
+        values="QTY",
+        aggfunc="sum",
+        fill_value=0,
+    ).reset_index()
+    for p in PERIODS:
+        if p not in brand.columns:
+            brand[p] = 0
+    brand["TOTAL"] = brand[["7DAY", "14DAY", "30DAY"]].sum(axis=1)
+    brand = brand.sort_values(["TOTAL", "BRAND"], ascending=[False, True]).head(10).drop(columns=["TOTAL"])
+    brand = brand[["BRAND", "7DAY", "14DAY", "30DAY"]].copy()
+    brand.columns = ["BRAND", "7 DAY", "14 DAY", "30 DAY"]
     return brand
 
 def render_left_table(df, title):
@@ -520,10 +555,10 @@ def render_left_table(df, title):
 left, right = st.columns(2)
 
 with left:
-    render_left_table(build_segment_table(filtered), "Segmentasi Harga")
+    render_left_table(build_segment_period_table(filtered), "Segmentasi Harga")
 
 with right:
-    render_left_table(build_brand_table(filtered), "Segmentasi Brand")
+    render_left_table(build_brand_period_table(filtered), "Segmentasi Brand")
 
 
 st.markdown("### Tabel Utama Analisa")
