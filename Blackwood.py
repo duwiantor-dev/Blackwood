@@ -5,6 +5,7 @@ from typing import List
 import numpy as np
 import pandas as pd
 import streamlit as st
+from st_aggrid import AgGrid, GridOptionsBuilder, ColumnsAutoSizeMode
 
 st.set_page_config(page_title="Dashboard Analisa Sales vs Stock", layout="wide")
 
@@ -395,6 +396,78 @@ def render_exact_header_table(df: pd.DataFrame):
     html.append("</tbody></table></div>")
     st.markdown("".join(html), unsafe_allow_html=True)
 
+
+def render_main_table_aggrid(df: pd.DataFrame):
+    display_df = df.copy()
+
+    # Tambahkan kolom PRODUCT dan BRAND di depan tabel utama
+    product_brand = (
+        filtered[["KODEBARANG", "PRODUCT_FINAL", "BRAND"]]
+        .drop_duplicates(subset=["KODEBARANG"], keep="first")
+        .copy()
+    )
+    display_df = display_df.merge(product_brand, how="left", on="KODEBARANG")
+    display_df = display_df.rename(columns={
+        "PRODUCT_FINAL": "PRODUCT",
+        "BRAND": "BRAND",
+    })
+
+    ordered_front = ["KODEBARANG", "PRODUCT", "BRAND", "SPESIFIKASI", "M3"]
+    other_cols = [c for c in display_df.columns if c not in ordered_front]
+    display_df = display_df[ordered_front + other_cols]
+
+    gb = GridOptionsBuilder.from_dataframe(display_df)
+    gb.configure_default_column(
+        filter=True,
+        sortable=True,
+        resizable=True,
+        floatingFilter=True,
+        editable=False,
+    )
+
+    # Kolom utama dibuat lebih ramping supaya enak dibaca cepat
+    gb.configure_column("KODEBARANG", header_name="KODEBARANG", minWidth=120, width=140, pinned="left")
+    gb.configure_column("PRODUCT", header_name="PRODUCT", minWidth=90, width=110, pinned="left")
+    gb.configure_column("BRAND", header_name="BRAND", minWidth=90, width=100, pinned="left")
+    gb.configure_column("SPESIFIKASI", header_name="SPESIFIKASI", minWidth=220, width=280)
+    gb.configure_column("M3", header_name="M3", type=["numericColumn"], minWidth=80, width=90)
+
+    # Kolom period/division dibuat kecil dan dinamis
+    for col in display_df.columns:
+        if col not in ["KODEBARANG", "PRODUCT", "BRAND", "SPESIFIKASI", "M3"]:
+            gb.configure_column(
+                col,
+                minWidth=78,
+                width=82,
+                type=["numericColumn"],
+            )
+
+    gb.configure_grid_options(
+        animateRows=False,
+        suppressColumnVirtualisation=False,
+        suppressRowVirtualisation=False,
+        enableCellTextSelection=True,
+        ensureDomOrder=True,
+        rowHeight=30,
+        headerHeight=34,
+    )
+
+    grid_options = gb.build()
+
+    AgGrid(
+        display_df,
+        gridOptions=grid_options,
+        height=520,
+        fit_columns_on_grid_load=False,
+        allow_unsafe_jscode=False,
+        columns_auto_size_mode=ColumnsAutoSizeMode.NO_AUTOSIZE,
+        theme="streamlit",
+        enable_enterprise_modules=False,
+        reload_data=False,
+    )
+
+    return display_df
+
 # =========================================================
 # UI
 # =========================================================
@@ -535,14 +608,14 @@ with right:
 
 
 st.markdown("### Tabel Utama Analisa")
-st.caption("Error tadi terjadi karena hasil pivot masih berbentuk MultiIndex, lalu digabung dengan kolom biasa saat merge. Di file ini bagian itu sudah dirapikan sebelum merge.")
+st.caption("Tabel utama sekarang memakai AgGrid, jadi bisa filter, sort, resize kolom, dan tampil lebih mirip Excel.")
 
 main_table = build_main_table(filtered)
-render_exact_header_table(main_table)
+main_table_export = render_main_table_aggrid(main_table)
 
 out = io.BytesIO()
 with pd.ExcelWriter(out, engine="openpyxl") as writer:
-    main_table.to_excel(writer, index=False, sheet_name="main_table")
+    main_table_export.to_excel(writer, index=False, sheet_name="main_table")
 
 st.download_button(
     "Download hasil analisa",
@@ -555,4 +628,4 @@ with st.expander("Debug hasil parsing"):
     st.write("Sample MPLSSR:", sales.head(20))
     st.write("Sample Pricelist:", stock.head(20))
     st.write("Sample Master:", master.head(20))
-    st.write("Sample Main Table:", main_table.head(20))
+    st.write("Sample Main Table:", main_table_export.head(20))
