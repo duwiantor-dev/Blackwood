@@ -1,3 +1,4 @@
+
 import io
 from typing import Dict, List
 
@@ -129,31 +130,72 @@ def metric_box(label: str, value: str, sub: str = ""):
         unsafe_allow_html=True,
     )
 
+
+def first_row_contains_text(df: pd.DataFrame, text: str):
+    target = str(text).strip().upper()
+    for idx in range(len(df)):
+        row = df.iloc[idx].astype(str).str.upper()
+        if row.str.contains(target, na=False).any():
+            return idx
+    return None
+
+
+def build_merge_key(*series_list: pd.Series) -> pd.Series:
+    normalized = [normalize_text(s) for s in series_list]
+    out = normalized[0].copy()
+    for s in normalized[1:]:
+        out = out.fillna(s)
+    return out
+
+
+def area_code_matches(value, prefixes: List[str]) -> bool:
+    if pd.isna(value):
+        return False
+    txt = str(value).strip().upper().replace(" ", "")
+    return any(txt.startswith(p) for p in prefixes)
+
+
 # =========================================================
 # MPLSSR parser
 # =========================================================
 def load_mplssr(file) -> pd.DataFrame:
-    df = pd.read_excel(file, sheet_name="ALL")
+    df = pd.read_excel(file, sheet_name="ALL", header=1)
+    df = df.iloc[4:].copy().reset_index(drop=True)
     df.columns = [str(c).strip() for c in df.columns]
-    base_cols = ["SKU NO", "PRODUCT", "BRAND", "KODE BARANG", "SPESIFIKASI"]
-    df = df[base_cols + [c for p in PERIODS for c in MPLSSR_DIV_COLS[p].values() if c in df.columns]].copy()
+
+    base_cols = ["PRODUCT", "BRAND", "KODE BARANG", "SPESIFIKASI"]
+    wanted_cols = base_cols + [c for p in PERIODS for c in MPLSSR_DIV_COLS[p].values() if c in df.columns]
+
+    for c in base_cols:
+        if c not in df.columns:
+            df[c] = np.nan
+
+    df = df[wanted_cols].copy()
+
     for c in base_cols:
         df[c] = normalize_text(df[c])
-    df = df[df["SKU NO"].notna()].copy()
-    df = df[~df["SKU NO"].isin(["TOTAL", "SHARE%"])]
+
+    df = df[df["KODE BARANG"].notna()].copy()
+    df = df[~df["KODE BARANG"].isin(["TOTAL", "SHARE%"])]
 
     rows = []
     for period in PERIODS:
         for div, col in MPLSSR_DIV_COLS[period].items():
             if col not in df.columns:
                 continue
-            tmp = df[["SKU NO", "PRODUCT", "BRAND", "KODE BARANG", "SPESIFIKASI", col]].copy()
+            tmp = df[["PRODUCT", "BRAND", "KODE BARANG", "SPESIFIKASI", col]].copy()
             tmp["QTY"] = to_num(tmp[col]).fillna(0)
             tmp["PERIOD"] = period
             tmp["DIVISION"] = div
+            tmp["SKU NO"] = np.nan
             rows.append(tmp[["SKU NO", "PRODUCT", "BRAND", "KODE BARANG", "SPESIFIKASI", "PERIOD", "DIVISION", "QTY"]])
-    out = pd.concat(rows, ignore_index=True)
+
+    out = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(
+        columns=["SKU NO", "PRODUCT", "BRAND", "KODE BARANG", "SPESIFIKASI", "PERIOD", "DIVISION", "QTY"]
+    )
+    out["_MERGE_KEY"] = build_merge_key(out["KODE BARANG"], out["SKU NO"])
     return out
+
 
 # =========================================================
 # Pricelist parser
@@ -170,9 +212,15 @@ def _ffill_header(values: List) -> List:
     return out
 
 
-def parse_pricelist_sheet(file, sheet_name: str) -> pd.DataFrame:
-    raw = pd.read_excel(file, sheet_name=sheet_name, header=None)
+def parse_pricelist_sheet(xls: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
+    raw = xls.parse(sheet_name=sheet_name, header=None)
     raw = raw.iloc[:, : raw.shape[1]].copy()
+
+    if sheet_name.upper() == "LAPTOP":
+        coming_idx = first_row_contains_text(raw, "COMING")
+        end_coming_idx = first_row_contains_text(raw, "END COMING")
+        if coming_idx is not None and end_coming_idx is not None and end_coming_idx >= coming_idx:
+            raw = raw.drop(index=range(coming_idx, end_coming_idx + 1)).reset_index(drop=True)
 
     row1 = raw.iloc[1].tolist()
     row2 = _ffill_header(raw.iloc[2].tolist())
@@ -190,32 +238,23 @@ def parse_pricelist_sheet(file, sheet_name: str) -> pd.DataFrame:
         else:
             columns.append(f"COL_{i}")
 
-    df = raw.iloc[4:].copy().reset_index(drop=True)
+    df = raw.iloc[5:].copy().reset_index(drop=True)
     df.columns = columns
 
     for c in ["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "TOT", "M3", "SRP"]:
         if c not in df.columns:
             df[c] = np.nan
 
-    ram_start_idx = None
-    for i, grp in enumerate(row2):
-        if grp == "RAM":
-            ram_start_idx = i
-            break
-
-    stock05_cols = []
-    if ram_start_idx is not None:
-        stock05_cols = [columns[i] for i in range(ram_start_idx, len(columns))]
-
-    stock03_cols = [c for c in columns if c in ["JKT__3A", "JKT__3B"]]
-    stock04_cols = [c for c in columns if c in ["JKT__4A", "JKT__4B"]]
+    stock03_cols = [columns[i] for i, area in enumerate(row3) if area_code_matches(area, ["3"])]
+    stock04_cols = [columns[i] for i, area in enumerate(row3) if area_code_matches(area, ["4"])]
+    stock05_cols = [columns[i] for i, area in enumerate(row3) if area_code_matches(area, ["5", "05"])]
 
     df["SKU NO"] = normalize_text(df["SKU NO"])
     df["PRODUCT"] = normalize_text(df["PRODUCT"])
     df["KODEBARANG"] = normalize_text(df["KODEBARANG"])
     df["SPESIFIKASI"] = normalize_text(df["SPESIFIKASI"])
-    df = df[df["SKU NO"].notna()].copy()
-    df = df[~df["SKU NO"].isin(["TOTAL"])]
+    df = df[df["KODEBARANG"].notna()].copy()
+    df = df[~df["KODEBARANG"].isin(["TOTAL"])]
 
     df["PRICE"] = to_num(df["M3"]) * 1000
     df["STOK_TOTAL"] = to_num(df["TOT"]).fillna(0)
@@ -224,30 +263,38 @@ def parse_pricelist_sheet(file, sheet_name: str) -> pd.DataFrame:
     df["STOK_DIV05"] = df[stock05_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1) if stock05_cols else 0
     df["CATEGORY"] = sheet_name.upper()
     df["PRICE_SEGMENT"] = df["PRICE"].apply(price_segment)
+    df["_MERGE_KEY"] = build_merge_key(df["KODEBARANG"], df["SKU NO"])
 
     return df[[
         "SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "PRICE", "PRICE_SEGMENT",
-        "STOK_TOTAL", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05", "CATEGORY"
+        "STOK_TOTAL", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05", "CATEGORY", "_MERGE_KEY"
     ]]
 
 
 def load_pricelist(file) -> pd.DataFrame:
     xls = pd.ExcelFile(file)
     sheets = [s for s in xls.sheet_names if s.upper() in VALID_PRICELIST_SHEETS]
-    frames = [parse_pricelist_sheet(file, s) for s in sheets]
-    out = pd.concat(frames, ignore_index=True)
-    out = out.drop_duplicates(subset=["SKU NO"], keep="first")
+    frames = [parse_pricelist_sheet(xls, s) for s in sheets]
+    out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(
+        columns=[
+            "SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "PRICE", "PRICE_SEGMENT",
+            "STOK_TOTAL", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05", "CATEGORY", "_MERGE_KEY"
+        ]
+    )
+    out = out.drop_duplicates(subset=["_MERGE_KEY"], keep="first")
     return out
+
 
 # =========================================================
 # Transform for dashboard
 # =========================================================
 def build_master(sales: pd.DataFrame, stock: pd.DataFrame) -> pd.DataFrame:
-    df = sales.merge(stock, how="left", on="SKU NO")
+    df = sales.merge(stock, how="left", on="_MERGE_KEY")
     for col in ["PRODUCT_y", "SPESIFIKASI_y", "KODEBARANG", "CATEGORY", "PRICE", "PRICE_SEGMENT", "STOK_TOTAL", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05"]:
         if col not in df.columns:
             df[col] = np.nan
 
+    df["SKU NO"] = build_merge_key(df.get("SKU NO_x", pd.Series(index=df.index, dtype=object)), df.get("SKU NO_y", pd.Series(index=df.index, dtype=object)))
     df["PRODUCT_FINAL"] = df["PRODUCT_x"].fillna(df.get("PRODUCT_y"))
     df["SPEC_FINAL"] = df["SPESIFIKASI_x"].fillna(df.get("SPESIFIKASI_y"))
     df["CATEGORY"] = df["CATEGORY"].fillna(df["PRODUCT_FINAL"])
@@ -342,7 +389,8 @@ st.sidebar.write("**Rules:**")
 st.sidebar.caption("""- QTY: MPLSSR
 - STOK: Pricelist
 - Harga: kolom M3
-- STOK DIV05: dari RAM sampai kolom paling belakang""")
+- STOK DIV05: berdasarkan kode area row 3
+- Sheet LAPTOP: hapus blok COMING sampai END COMING""")
 
 if not mplssr_file or not pricelist_file:
     st.info("Silakan upload file MPLSSR dan Pricelist untuk menampilkan dashboard.")
