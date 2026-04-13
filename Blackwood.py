@@ -35,74 +35,21 @@ VALID_PRICELIST_SHEETS = [
     "SER OTH CON",
 ]
 
-# =========================================================
-# Styling
-# =========================================================
 st.markdown(
     """
     <style>
     .block-container {padding-top: 1.2rem; padding-bottom: 1rem;}
-    .metric-card {
-        background: #ffffff;
-        border: 1px solid #e6e9ef;
-        border-radius: 14px;
-        padding: 14px 16px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-        min-height: 108px;
-    }
-    .metric-label {font-size: 0.82rem; color: #6b7280; margin-bottom: 6px;}
-    .metric-value {font-size: 1.55rem; font-weight: 700; color: #111827;}
-    .metric-sub {font-size: 0.82rem; color: #6b7280; margin-top: 6px;}
-    .section-card {
-        background: #ffffff;
-        border: 1px solid #e6e9ef;
-        border-radius: 16px;
-        padding: 14px 14px 10px 14px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-        margin-bottom: 14px;
-    }
-    .up-chip {background:#e8f6ee; color:#15803d; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600;}
-    .down-chip {background:#fdecec; color:#b91c1c; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600;}
-    .neutral-chip {background:#eef2ff; color:#4338ca; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600;}
+    .stDataFrame {border-radius: 10px;}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# =========================================================
-# Helpers
-# =========================================================
 def normalize_text(series: pd.Series) -> pd.Series:
     return series.astype(str).str.strip().str.upper().replace({"NAN": np.nan, "NONE": np.nan, "": np.nan})
 
-
 def to_num(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce")
-
-
-def fmt_int(v: float) -> str:
-    if pd.isna(v):
-        return "0"
-    return f"{v:,.0f}".replace(",", ".")
-
-
-def fmt_pct(v: float) -> str:
-    if pd.isna(v):
-        return "-"
-    return f"{v:,.1f}%".replace(",", "X").replace(".", ",").replace("X", ".")
-
-
-def fmt_price(v: float) -> str:
-    if pd.isna(v):
-        return "-"
-    return f"Rp {v:,.0f}".replace(",", ".")
-
-
-def growth_pct(cur: float, base: float) -> float:
-    if pd.isna(base) or base == 0:
-        return np.nan
-    return (cur - base) / base * 100
-
 
 def price_segment(price: float) -> str:
     if pd.isna(price):
@@ -112,25 +59,6 @@ def price_segment(price: float) -> str:
             return label
     return "UNKNOWN"
 
-
-def chip_html(text: str, kind: str) -> str:
-    cls = {"up": "up-chip", "down": "down-chip", "neutral": "neutral-chip"}.get(kind, "neutral-chip")
-    return f'<span class="{cls}">{text}</span>'
-
-
-def metric_box(label: str, value: str, sub: str = ""):
-    st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div>
-            <div class="metric-sub">{sub}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def first_row_contains_text(df: pd.DataFrame, text: str):
     target = str(text).strip().upper()
     for idx in range(len(df)):
@@ -139,7 +67,6 @@ def first_row_contains_text(df: pd.DataFrame, text: str):
             return idx
     return None
 
-
 def build_merge_key(*series_list: pd.Series) -> pd.Series:
     normalized = [normalize_text(s) for s in series_list]
     out = normalized[0].copy()
@@ -147,30 +74,25 @@ def build_merge_key(*series_list: pd.Series) -> pd.Series:
         out = out.fillna(s)
     return out
 
-
 def area_code_matches(value, prefixes: List[str]) -> bool:
     if pd.isna(value):
         return False
     txt = str(value).strip().upper().replace(" ", "")
     return any(txt.startswith(p) for p in prefixes)
 
-
-# =========================================================
-# MPLSSR parser
-# =========================================================
 def load_mplssr(file) -> pd.DataFrame:
     df = pd.read_excel(file, sheet_name="ALL", header=1)
     df = df.iloc[4:].copy().reset_index(drop=True)
     df.columns = [str(c).strip() for c in df.columns]
 
     base_cols = ["PRODUCT", "BRAND", "KODE BARANG", "SPESIFIKASI"]
-    wanted_cols = base_cols + [c for p in PERIODS for c in MPLSSR_DIV_COLS[p].values() if c in df.columns]
+    wanted_div_cols = [c for p in PERIODS for c in MPLSSR_DIV_COLS[p].values() if c in df.columns]
 
     for c in base_cols:
         if c not in df.columns:
             df[c] = np.nan
 
-    df = df[wanted_cols].copy()
+    df = df[base_cols + wanted_div_cols].copy()
 
     for c in base_cols:
         df[c] = normalize_text(df[c])
@@ -196,10 +118,6 @@ def load_mplssr(file) -> pd.DataFrame:
     out["_MERGE_KEY"] = build_merge_key(out["KODE BARANG"], out["SKU NO"])
     return out
 
-
-# =========================================================
-# Pricelist parser
-# =========================================================
 def _ffill_header(values: List) -> List:
     out = []
     last = None
@@ -210,7 +128,6 @@ def _ffill_header(values: List) -> List:
         else:
             out.append(last)
     return out
-
 
 def parse_pricelist_sheet(xls: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
     raw = xls.parse(sheet_name=sheet_name, header=None)
@@ -270,7 +187,6 @@ def parse_pricelist_sheet(xls: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
         "STOK_TOTAL", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05", "CATEGORY", "_MERGE_KEY"
     ]]
 
-
 def load_pricelist(file) -> pd.DataFrame:
     xls = pd.ExcelFile(file)
     sheets = [s for s in xls.sheet_names if s.upper() in VALID_PRICELIST_SHEETS]
@@ -284,17 +200,18 @@ def load_pricelist(file) -> pd.DataFrame:
     out = out.drop_duplicates(subset=["_MERGE_KEY"], keep="first")
     return out
 
-
-# =========================================================
-# Transform for dashboard
-# =========================================================
 def build_master(sales: pd.DataFrame, stock: pd.DataFrame) -> pd.DataFrame:
     df = sales.merge(stock, how="left", on="_MERGE_KEY")
-    for col in ["PRODUCT_y", "SPESIFIKASI_y", "KODEBARANG", "CATEGORY", "PRICE", "PRICE_SEGMENT", "STOK_TOTAL", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05"]:
+    for col in [
+        "PRODUCT_y", "SPESIFIKASI_y", "CATEGORY", "PRICE", "PRICE_SEGMENT",
+        "STOK_TOTAL", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05", "KODEBARANG"
+    ]:
         if col not in df.columns:
             df[col] = np.nan
 
-    df["SKU NO"] = build_merge_key(df.get("SKU NO_x", pd.Series(index=df.index, dtype=object)), df.get("SKU NO_y", pd.Series(index=df.index, dtype=object)))
+    empty_series = pd.Series(index=df.index, dtype=object)
+    df["SKU NO"] = build_merge_key(df.get("SKU NO_x", empty_series), df.get("SKU NO_y", empty_series))
+    df["KODEBARANG_FINAL"] = build_merge_key(df.get("KODE BARANG", empty_series), df.get("KODEBARANG", empty_series), df["SKU NO"])
     df["PRODUCT_FINAL"] = df["PRODUCT_x"].fillna(df.get("PRODUCT_y"))
     df["SPEC_FINAL"] = df["SPESIFIKASI_x"].fillna(df.get("SPESIFIKASI_y"))
     df["CATEGORY"] = df["CATEGORY"].fillna(df["PRODUCT_FINAL"])
@@ -304,79 +221,115 @@ def build_master(sales: pd.DataFrame, stock: pd.DataFrame) -> pd.DataFrame:
 
     stock_map = {"DIV03": "STOK_DIV03", "DIV04": "STOK_DIV04", "DIV05": "STOK_DIV05"}
     df["STOK_DIVISI"] = df.apply(lambda r: r.get(stock_map.get(r["DIVISION"]), 0), axis=1)
-    df["SELL_THRU_%"] = np.where(df["STOK_DIVISI"] > 0, df["QTY"] / df["STOK_DIVISI"] * 100, np.nan)
     return df
 
+def build_main_table(df: pd.DataFrame) -> pd.DataFrame:
+    base = df.copy()
 
-def compare_table(df: pd.DataFrame, dim: str) -> pd.DataFrame:
-    qty = df.groupby([dim, "DIVISION"], as_index=False)["QTY"].sum().pivot(index=dim, columns="DIVISION", values="QTY").fillna(0)
-    stock = df.groupby([dim, "DIVISION"], as_index=False)["STOK_DIVISI"].sum().pivot(index=dim, columns="DIVISION", values="STOK_DIVISI").fillna(0)
-    qty.columns = [f"QTY_{c}" for c in qty.columns]
-    stock.columns = [f"STOK_{c}" for c in stock.columns]
-    out = qty.join(stock, how="outer").fillna(0).reset_index()
-    for d in DIVISIONS:
-        if f"QTY_{d}" not in out.columns:
-            out[f"QTY_{d}"] = 0
-        if f"STOK_{d}" not in out.columns:
-            out[f"STOK_{d}"] = 0
-    out["QTY_TOTAL"] = out[[f"QTY_{d}" for d in DIVISIONS]].sum(axis=1)
-    out["STOK_TOTAL"] = out[[f"STOK_{d}" for d in DIVISIONS]].sum(axis=1)
-    out["SELL_THRU_%"] = np.where(out["STOK_TOTAL"] > 0, out["QTY_TOTAL"] / out["STOK_TOTAL"] * 100, np.nan)
-    return out.sort_values(["QTY_TOTAL", "STOK_TOTAL"], ascending=[False, False])
-
-
-def top_table(df: pd.DataFrame, dim: str, top_n: int = 10) -> pd.DataFrame:
-    t = compare_table(df, dim).head(top_n).copy()
-    return t
-
-
-def trend_table(df: pd.DataFrame, dim: str) -> pd.DataFrame:
-    piv = df.groupby([dim, "PERIOD"], as_index=False)["QTY"].sum().pivot(index=dim, columns="PERIOD", values="QTY").fillna(0).reset_index()
-    for p in PERIODS:
-        if p not in piv.columns:
-            piv[p] = 0
-    piv["DELTA_7_vs_30"] = piv["7DAY"] - piv["30DAY"]
-    piv["GROWTH_7_vs_30_%"] = np.where(piv["30DAY"] > 0, (piv["7DAY"] - piv["30DAY"]) / piv["30DAY"] * 100, np.nan)
-    piv["INSIGHT"] = np.select(
-        [
-            (piv["7DAY"] > piv["30DAY"]) & (piv["30DAY"] > 0),
-            (piv["7DAY"] < piv["30DAY"]) & (piv["30DAY"] > 0),
-        ],
-        ["Alert cepat / cek promo", "Momentum melemah"],
-        default="Perlu validasi"
+    qty_piv = (
+        base.pivot_table(
+            index=["KODEBARANG_FINAL", "SPEC_FINAL", "PRICE"],
+            columns=["PERIOD", "DIVISION"],
+            values="QTY",
+            aggfunc="sum",
+            fill_value=0,
+        )
     )
-    return piv.sort_values("DELTA_7_vs_30", ascending=False)
 
+    stock_base = (
+        base[["KODEBARANG_FINAL", "SPEC_FINAL", "PRICE", "DIVISION", "STOK_DIVISI"]]
+        .drop_duplicates()
+        .copy()
+    )
+    stock_base["dummy_period"] = "ALL"
 
-def render_analysis_cards(table: pd.DataFrame, dim: str, title: str, sort_az: bool = False):
-    with st.container(border=False):
-        st.markdown(f"### {title}")
-        if sort_az:
-            sort_mode = st.radio(f"Urutan {dim}", ["TOTAL", "A-Z", "Z-A"], horizontal=True, key=f"sort_{dim}")
-            if sort_mode == "A-Z":
-                table = table.sort_values(dim, ascending=True)
-            elif sort_mode == "Z-A":
-                table = table.sort_values(dim, ascending=False)
-        cols = st.columns(3)
-        for i, (_, r) in enumerate(table.iterrows()):
-            with cols[i % 3]:
-                with st.container(border=True):
-                    st.markdown(f"**{r[dim]}**")
-                    q1, q2, q3 = st.columns(3)
-                    q1.metric("QTY D03", fmt_int(r["QTY_DIV03"]))
-                    q2.metric("QTY D04", fmt_int(r["QTY_DIV04"]))
-                    q3.metric("QTY D05", fmt_int(r["QTY_DIV05"]))
-                    s1, s2, s3 = st.columns(3)
-                    s1.metric("STK D03", fmt_int(r["STOK_DIV03"]))
-                    s2.metric("STK D04", fmt_int(r["STOK_DIV04"]))
-                    s3.metric("STK D05", fmt_int(r["STOK_DIV05"]))
-                    st.caption(f"Total QTY: {fmt_int(r['QTY_TOTAL'])} | Total STOK: {fmt_int(r['STOK_TOTAL'])} | Sell Thru: {fmt_pct(r['SELL_THRU_%'])}")
-        with st.expander(f"Lihat tabel detail - {title}"):
-            st.dataframe(table, use_container_width=True)
+    stock_piv = (
+        stock_base.pivot_table(
+            index=["KODEBARANG_FINAL", "SPEC_FINAL", "PRICE"],
+            columns=["dummy_period", "DIVISION"],
+            values="STOK_DIVISI",
+            aggfunc="sum",
+            fill_value=0,
+        )
+    )
 
-# =========================================================
-# Sidebar
-# =========================================================
+    out = qty_piv.copy() if not qty_piv.empty else pd.DataFrame(index=stock_piv.index)
+    if not stock_piv.empty:
+        out = out.join(stock_piv, how="outer")
+
+    out = out.fillna(0).reset_index()
+
+    rename_map = {
+        "KODEBARANG_FINAL": "KODEBARANG",
+        "SPEC_FINAL": "SPESIFIKASI",
+        "PRICE": "M3",
+    }
+
+    if isinstance(out.columns, pd.MultiIndex):
+        new_cols = []
+        for col in out.columns:
+            if not isinstance(col, tuple):
+                new_cols.append(rename_map.get(col, col))
+                continue
+
+            if len(col) == 3:
+                metric, period, div = col
+                if metric == "QTY":
+                    period_label = {"7DAY": "7 DAY ANALISA", "14DAY": "14 DAY ANALISA", "30DAY": "30 DAY ANALISA"}.get(period, period)
+                    div_label = {"DIV03": "03 OLP", "DIV04": "04 MOD", "DIV05": "05 OLR"}.get(div, div)
+                    new_cols.append(f"{period_label}|{div_label}|QTY")
+                elif metric == "STOK_DIVISI":
+                    div_label = {"DIV03": "03 OLP", "DIV04": "04 MOD", "DIV05": "05 OLR"}.get(div, div)
+                    new_cols.append(f"ALL|{div_label}|STOK")
+                else:
+                    new_cols.append("|".join([str(x) for x in col if str(x) != ""]))
+            elif len(col) == 2:
+                a, b = col
+                if a == "STOK_DIVISI":
+                    div_label = {"DIV03": "03 OLP", "DIV04": "04 MOD", "DIV05": "05 OLR"}.get(b, b)
+                    new_cols.append(f"ALL|{div_label}|STOK")
+                elif a in rename_map:
+                    new_cols.append(rename_map.get(a, a))
+                else:
+                    new_cols.append("|".join([str(x) for x in col if str(x) != ""]))
+            else:
+                flat = "|".join([str(x) for x in col if str(x) != ""])
+                new_cols.append(rename_map.get(flat, flat))
+        out.columns = new_cols
+
+    for period_label in ["7 DAY ANALISA", "14 DAY ANALISA", "30 DAY ANALISA"]:
+        for div_label in ["03 OLP", "04 MOD", "05 OLR"]:
+            qty_col = f"{period_label}|{div_label}|QTY"
+            stok_all_col = f"ALL|{div_label}|STOK"
+            final_stok_col = f"{period_label}|{div_label}|STOK"
+
+            if qty_col not in out.columns:
+                out[qty_col] = 0
+            if stok_all_col not in out.columns:
+                out[stok_all_col] = 0
+            out[final_stok_col] = out[stok_all_col]
+
+    drop_cols = [c for c in out.columns if str(c).startswith("ALL|")]
+    if drop_cols:
+        out = out.drop(columns=drop_cols)
+
+    ordered_cols = ["KODEBARANG", "SPESIFIKASI", "M3"]
+    for period_label in ["7 DAY ANALISA", "14 DAY ANALISA", "30 DAY ANALISA"]:
+        for div_label in ["03 OLP", "04 MOD", "05 OLR"]:
+            ordered_cols.extend([
+                f"{period_label}|{div_label}|QTY",
+                f"{period_label}|{div_label}|STOK",
+            ])
+
+    for col in ordered_cols:
+        if col not in out.columns:
+            out[col] = 0 if col != "KODEBARANG" and col != "SPESIFIKASI" else ""
+
+    out = out[ordered_cols].copy()
+    out["M3"] = to_num(out["M3"]).fillna(0) / 1000
+    out = out.sort_values(["KODEBARANG", "SPESIFIKASI"], ascending=[True, True]).reset_index(drop=True)
+    return out
+
 st.title("Dashboard Analisa Sales vs Stock")
 st.caption("QTY diambil dari MPLSSR. STOK dan harga diambil dari Pricelist. Fokus awal dibuat seperti dashboard pada contoh.")
 
@@ -391,7 +344,7 @@ st.sidebar.caption("""- QTY: MPLSSR
 - Harga: kolom M3
 - STOK DIV05: berdasarkan kode area row 3
 - Sheet LAPTOP: hapus blok COMING sampai END COMING
-- Klik tombol PROSES setelah atur filter""")
+- Setelah 2 file ter-upload, tabel langsung tampil otomatis""")
 
 if not mplssr_file or not pricelist_file:
     st.info("Silakan upload file MPLSSR dan Pricelist untuk menampilkan dashboard.")
@@ -405,28 +358,19 @@ except Exception as e:
     st.error(f"Gagal membaca file: {e}")
     st.stop()
 
-# =========================================================
-# Filters
-# =========================================================
+default_product = ["LAPTOP R"] if "LAPTOP R" in master["PRODUCT_FINAL"].dropna().unique().tolist() else []
+
 with st.sidebar:
     st.markdown("---")
-    with st.form("filter_form"):
-        metric_type = st.selectbox("Metric utama", ["QTY", "STOK", "SELL THRU"])
-        selected_products = st.multiselect("Product", sorted(master["PRODUCT_FINAL"].dropna().unique().tolist()))
-        selected_brands = st.multiselect("Brand", sorted(master["BRAND"].dropna().unique().tolist()))
-        selected_periods = st.multiselect("Periode", PERIODS, default=PERIODS)
-        selected_segments = st.multiselect("Segment Harga", [s[2] for s in PRICE_SEGMENTS] + ["UNKNOWN"])
-        process_clicked = st.form_submit_button("PROSES", use_container_width=True)
-
-if "filter_submitted" not in st.session_state:
-    st.session_state["filter_submitted"] = False
-
-if process_clicked:
-    st.session_state["filter_submitted"] = True
-
-if not st.session_state["filter_submitted"]:
-    st.info("Silakan atur filter di sebelah kiri lalu klik PROSES.")
-    st.stop()
+    metric_type = st.selectbox("Metric utama", ["QTY", "STOK"], index=0)
+    selected_products = st.multiselect(
+        "Product",
+        sorted(master["PRODUCT_FINAL"].dropna().unique().tolist()),
+        default=default_product,
+    )
+    selected_brands = st.multiselect("Brand", sorted(master["BRAND"].dropna().unique().tolist()))
+    selected_periods = st.multiselect("Periode", PERIODS, default=PERIODS)
+    selected_segments = st.multiselect("Segment Harga", [s[2] for s in PRICE_SEGMENTS] + ["UNKNOWN"])
 
 filtered = master.copy()
 if selected_products:
@@ -442,81 +386,44 @@ if filtered.empty:
     st.warning("Data kosong setelah filter diterapkan.")
     st.stop()
 
-# =========================================================
-# Tabel utama analisa
-# =========================================================
 st.markdown("### Tabel Utama Analisa")
 
-table_period = st.selectbox("Periode Tabel Utama", PERIODS, index=0)
+main_table = build_main_table(filtered)
 
-main = filtered[filtered["PERIOD"] == table_period].copy()
+period_order = ["7 DAY ANALISA", "14 DAY ANALISA", "30 DAY ANALISA"]
+div_order = ["03 OLP", "04 MOD", "05 OLR"]
 
-main_table = (
-    main.groupby(["KODE BARANG", "SPEC_FINAL", "PRICE"], as_index=False)[["QTY", "STOK_DIVISI"]]
-    .sum()
-    .pivot(index=["KODE BARANG", "SPEC_FINAL", "PRICE"], columns="DIVISION", values=["QTY", "STOK_DIVISI"])
+column_config = {
+    "KODEBARANG": st.column_config.TextColumn("KODEBARANG", width="medium"),
+    "SPESIFIKASI": st.column_config.TextColumn("SPESIFIKASI", width="large"),
+    "M3": st.column_config.NumberColumn("M3", format="%.0f", width="small"),
+}
+
+for period_label in period_order:
+    for div_label in div_order:
+        for metric_label in ["QTY", "STOK"]:
+            col_name = f"{period_label}|{div_label}|{metric_label}"
+            column_config[col_name] = st.column_config.NumberColumn(
+                f"{div_label}\n{metric_label}",
+                format="%.0f",
+                width="small",
+            )
+
+st.dataframe(
+    main_table,
+    use_container_width=True,
+    height=520,
+    column_config=column_config,
 )
 
-if isinstance(main_table.columns, pd.MultiIndex):
-    main_table.columns = [f"{a}_{b}" for a, b in main_table.columns]
-
-main_table = main_table.fillna(0).reset_index()
-
-for d in DIVISIONS:
-    if f"QTY_{d}" not in main_table.columns:
-        main_table[f"QTY_{d}"] = 0
-    if f"STOK_DIVISI_{d}" not in main_table.columns:
-        main_table[f"STOK_DIVISI_{d}"] = 0
-
-main_table = main_table.rename(columns={
-    "KODE BARANG": "KODEBARANG",
-    "SPEC_FINAL": "SPESIFIKASI",
-    "PRICE": "M3",
-    "QTY_DIV03": "03 OLP QTY",
-    "STOK_DIVISI_DIV03": "03 OLP STOK",
-    "QTY_DIV04": "04 MOD QTY",
-    "STOK_DIVISI_DIV04": "04 MOD STOK",
-    "QTY_DIV05": "05 OLR QTY",
-    "STOK_DIVISI_DIV05": "05 OLR STOK",
-})
-
-main_table["M3"] = main_table["M3"] / 1000
-
-ordered_cols = [
-    "KODEBARANG",
-    "SPESIFIKASI",
-    "M3",
-    "03 OLP QTY",
-    "03 OLP STOK",
-    "04 MOD QTY",
-    "04 MOD STOK",
-    "05 OLR QTY",
-    "05 OLR STOK",
-]
-
-for col in ordered_cols:
-    if col not in main_table.columns:
-        main_table[col] = 0 if "QTY" in col or "STOK" in col or col == "M3" else ""
-
-main_table = main_table[ordered_cols].sort_values(["KODEBARANG", "SPESIFIKASI"], ascending=[True, True])
-
-st.dataframe(main_table, use_container_width=True, height=520)
-# =========================================================
-# Download outputs
-# =========================================================
 out = io.BytesIO()
 with pd.ExcelWriter(out, engine="openpyxl") as writer:
-    master.to_excel(writer, index=False, sheet_name="master")
     main_table.to_excel(writer, index=False, sheet_name="main_table")
-    segment_table.to_excel(writer, index=False, sheet_name="segment")
-    brand_table.to_excel(writer, index=False, sheet_name="brand")
-    spec_table.to_excel(writer, index=False, sheet_name="spesifikasi")
-    alert.to_excel(writer, index=False, sheet_name="alert")
 
 st.download_button(
     "Download hasil analisa",
     data=out.getvalue(),
-    file_name="dashboard_sales_stock.xlsx",
+    file_name="dashboard_sales_stock_main_table.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
 
@@ -524,3 +431,4 @@ with st.expander("Debug hasil parsing"):
     st.write("Sales:", sales.head(20))
     st.write("Stock:", stock.head(20))
     st.write("Master:", master.head(20))
+    st.write("Main Table:", main_table.head(20))
