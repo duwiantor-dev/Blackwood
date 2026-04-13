@@ -96,6 +96,14 @@ def price_segment(price: float) -> str:
             return label
     return "UNKNOWN"
 
+SEGMENT_ORDER = [label for _, _, label in PRICE_SEGMENTS]
+
+def segment_sort_key(label: str) -> int:
+    try:
+        return SEGMENT_ORDER.index(label)
+    except ValueError:
+        return len(SEGMENT_ORDER)
+
 def first_row_contains_text(df: pd.DataFrame, text: str):
     target = str(text).strip().upper()
     for idx in range(len(df)):
@@ -405,7 +413,8 @@ st.sidebar.caption("""- QTY: MPLSSR
 - MPLSSR: header row 2, data row 7
 - Pricelist: header row 2, data row 6
 - 05 OLR cek kode area row 3
-- Sheet LAPTOP hapus COMING s/d END COMING""")
+- Sheet LAPTOP hapus COMING s/d END COMING
+- Gunakan tombol PROSES setelah pilih filter""")
 
 if not mplssr_file or not pricelist_file:
     st.info("Silakan upload file MPLSSR dan Pricelist.")
@@ -424,9 +433,21 @@ default_product = ["LAPTOP R"] if "LAPTOP R" in product_options else []
 
 with st.sidebar:
     st.markdown("---")
-    selected_products = st.multiselect("Product", product_options, default=default_product)
-    selected_brands = st.multiselect("Brand", sorted(master["BRAND"].dropna().unique().tolist()))
-    selected_segments = st.multiselect("Segment Harga", [s[2] for s in PRICE_SEGMENTS] + ["UNKNOWN"])
+    with st.form("filter_form"):
+        selected_products = st.multiselect("Product", product_options, default=default_product)
+        selected_brands = st.multiselect("Brand", sorted(master["BRAND"].dropna().unique().tolist()))
+        selected_segments = st.multiselect("Segment Harga", [s[2] for s in PRICE_SEGMENTS] + ["UNKNOWN"])
+        process_clicked = st.form_submit_button("PROSES", use_container_width=True)
+
+if "filter_submitted" not in st.session_state:
+    st.session_state["filter_submitted"] = False
+
+if process_clicked:
+    st.session_state["filter_submitted"] = True
+
+if not st.session_state["filter_submitted"]:
+    st.info("Silakan pilih filter terlebih dulu, lalu klik PROSES.")
+    st.stop()
 
 filtered = master.copy()
 if selected_products:
@@ -446,23 +467,63 @@ if filtered.empty:
 # =========================================================
 
 def build_segment_table(df):
-    df["SEGMENT"] = df["PRICE"].apply(price_segment)
-    seg = df.groupby(["SEGMENT", "DIVISION"])["QTY"].sum().unstack().fillna(0)
-    return seg.reset_index()
+    tmp = df.copy()
+    tmp["SEGMENT"] = tmp["PRICE"].apply(price_segment)
+    seg = tmp.groupby(["SEGMENT", "DIVISION"])["QTY"].sum().unstack().fillna(0).reset_index()
+    for div in DIVISIONS:
+        if div not in seg.columns:
+            seg[div] = 0
+    seg = seg[["SEGMENT", "DIV03", "DIV04", "DIV05"]].copy()
+    seg = seg.sort_values("SEGMENT", key=lambda s: s.map(segment_sort_key)).reset_index(drop=True)
+    seg.columns = ["SEGMENT", "DIV 03", "DIV 04", "DIV 05"]
+    return seg
 
 def build_brand_table(df):
-    brand = df.groupby(["BRAND", "DIVISION"])["QTY"].sum().unstack().fillna(0)
-    return brand.reset_index().sort_values(by="DIV03", ascending=False).head(10)
+    brand = df.groupby(["BRAND", "DIVISION"])["QTY"].sum().unstack().fillna(0).reset_index()
+    for div in DIVISIONS:
+        if div not in brand.columns:
+            brand[div] = 0
+    brand = brand[["BRAND", "DIV03", "DIV04", "DIV05"]].copy()
+    brand["TOTAL"] = brand[["DIV03", "DIV04", "DIV05"]].sum(axis=1)
+    brand = brand.sort_values(["TOTAL", "BRAND"], ascending=[False, True]).head(10).drop(columns=["TOTAL"])
+    brand.columns = ["BRAND", "DIV 03", "DIV 04", "DIV 05"]
+    return brand
+
+def render_left_table(df, title):
+    html = []
+    html.append("""
+    <div style="border:1px solid #d9d9d9;border-radius:8px;background:#fff;padding:8px;">
+      <div style="font-weight:700;font-size:16px;margin-bottom:8px;">""" + title + """</div>
+      <div style="overflow-x:auto;">
+        <table style="border-collapse:collapse;width:100%;font-size:12px;">
+    """)
+    html.append("<thead><tr>")
+    for col in df.columns:
+        html.append(f'<th style="border:1px solid #2b2b2b;background:#f3f4f6;padding:6px;text-align:left;">{col}</th>')
+    html.append("</tr></thead><tbody>")
+    for _, row in df.iterrows():
+        html.append("<tr>")
+        for col in df.columns:
+            val = row[col]
+            try:
+                if pd.notna(val) and isinstance(val, (int, float, np.integer, np.floating)):
+                    display = f"{int(round(float(val))):,}".replace(",", ".")
+                else:
+                    display = "" if pd.isna(val) else str(val)
+            except Exception:
+                display = str(val)
+            html.append(f'<td style="border:1px solid #2b2b2b;padding:6px;text-align:left;">{display}</td>')
+        html.append("</tr>")
+    html.append("</tbody></table></div></div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
 
 left, right = st.columns(2)
 
 with left:
-    st.markdown("### Segmentasi Harga")
-    st.dataframe(build_segment_table(filtered), use_container_width=True)
+    render_left_table(build_segment_table(filtered), "Segmentasi Harga")
 
 with right:
-    st.markdown("### Segmentasi Brand")
-    st.dataframe(build_brand_table(filtered), use_container_width=True)
+    render_left_table(build_brand_table(filtered), "Segmentasi Brand")
 
 
 st.markdown("### Tabel Utama Analisa")
