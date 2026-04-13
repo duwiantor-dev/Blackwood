@@ -339,10 +339,10 @@ pricelist_file = st.sidebar.file_uploader("Upload Pricelist", type=["xlsx", "xls
 
 st.sidebar.markdown("---")
 st.sidebar.write("**Rules:**")
-st.sidebar.caption("- QTY: MPLSSR
+st.sidebar.caption("""- QTY: MPLSSR
 - STOK: Pricelist
 - Harga: kolom M3
-- STOK DIV05: dari RAM sampai kolom paling belakang")
+- STOK DIV05: dari RAM sampai kolom paling belakang""")
 
 if not mplssr_file or not pricelist_file:
     st.info("Silakan upload file MPLSSR dan Pricelist untuk menampilkan dashboard.")
