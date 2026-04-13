@@ -390,7 +390,8 @@ st.sidebar.caption("""- QTY: MPLSSR
 - STOK: Pricelist
 - Harga: kolom M3
 - STOK DIV05: berdasarkan kode area row 3
-- Sheet LAPTOP: hapus blok COMING sampai END COMING""")
+- Sheet LAPTOP: hapus blok COMING sampai END COMING
+- Klik tombol PROSES setelah atur filter""")
 
 if not mplssr_file or not pricelist_file:
     st.info("Silakan upload file MPLSSR dan Pricelist untuk menampilkan dashboard.")
@@ -409,18 +410,27 @@ except Exception as e:
 # =========================================================
 with st.sidebar:
     st.markdown("---")
-    metric_type = st.selectbox("Metric utama", ["QTY", "STOK", "SELL THRU"])
-    selected_products = st.multiselect("Product", sorted(master["PRODUCT_FINAL"].dropna().unique().tolist()))
-    selected_categories = st.multiselect("Category", sorted(master["CATEGORY"].dropna().unique().tolist()))
-    selected_brands = st.multiselect("Brand", sorted(master["BRAND"].dropna().unique().tolist()))
-    selected_periods = st.multiselect("Periode", PERIODS, default=PERIODS)
-    selected_segments = st.multiselect("Segment Harga", [s[2] for s in PRICE_SEGMENTS] + ["UNKNOWN"])
+    with st.form("filter_form"):
+        metric_type = st.selectbox("Metric utama", ["QTY", "STOK", "SELL THRU"])
+        selected_products = st.multiselect("Product", sorted(master["PRODUCT_FINAL"].dropna().unique().tolist()))
+        selected_brands = st.multiselect("Brand", sorted(master["BRAND"].dropna().unique().tolist()))
+        selected_periods = st.multiselect("Periode", PERIODS, default=PERIODS)
+        selected_segments = st.multiselect("Segment Harga", [s[2] for s in PRICE_SEGMENTS] + ["UNKNOWN"])
+        process_clicked = st.form_submit_button("PROSES", use_container_width=True)
+
+if "filter_submitted" not in st.session_state:
+    st.session_state["filter_submitted"] = False
+
+if process_clicked:
+    st.session_state["filter_submitted"] = True
+
+if not st.session_state["filter_submitted"]:
+    st.info("Silakan atur filter di sebelah kiri lalu klik PROSES.")
+    st.stop()
 
 filtered = master.copy()
 if selected_products:
     filtered = filtered[filtered["PRODUCT_FINAL"].isin(selected_products)]
-if selected_categories:
-    filtered = filtered[filtered["CATEGORY"].isin(selected_categories)]
 if selected_brands:
     filtered = filtered[filtered["BRAND"].isin(selected_brands)]
 if selected_periods:
@@ -433,91 +443,64 @@ if filtered.empty:
     st.stop()
 
 # =========================================================
-# KPI row
-# =========================================================
-qty7 = filtered.loc[filtered["PERIOD"] == "7DAY", "QTY"].sum()
-qty14 = filtered.loc[filtered["PERIOD"] == "14DAY", "QTY"].sum()
-qty30 = filtered.loc[filtered["PERIOD"] == "30DAY", "QTY"].sum()
-stok_total = filtered[["SKU NO", "DIVISION", "STOK_DIVISI"]].drop_duplicates()["STOK_DIVISI"].sum()
-sell_thru = growth_pct(qty7 + qty14 + qty30, stok_total)
-trend = growth_pct(qty7, qty30)
-
-c1, c2, c3, c4, c5 = st.columns(5)
-with c1:
-    metric_box("Total QTY 7DAY", fmt_int(qty7), "Alert cepat")
-with c2:
-    metric_box("Total QTY 14DAY", fmt_int(qty14), "Validasi tren")
-with c3:
-    metric_box("Total QTY 30DAY", fmt_int(qty30), "Baseline")
-with c4:
-    metric_box("Total Stock", fmt_int(stok_total), "Dari pricelist")
-with c5:
-    metric_box("Growth 7 vs 30", fmt_pct(trend), "Naik/turun momentum")
-
-if pd.notna(trend) and trend > 0:
-    st.markdown(chip_html("7DAY di atas 30DAY - cek apakah real growth atau efek promo", "up"), unsafe_allow_html=True)
-elif pd.notna(trend) and trend < 0:
-    st.markdown(chip_html("7DAY di bawah 30DAY - momentum melemah", "down"), unsafe_allow_html=True)
-else:
-    st.markdown(chip_html("Belum cukup sinyal untuk membaca tren", "neutral"), unsafe_allow_html=True)
-
-# =========================================================
-# Main table like screenshot
+# Tabel utama analisa
 # =========================================================
 st.markdown("### Tabel Utama Analisa")
-base_period = st.selectbox("Periode tabel utama", PERIODS, index=2)
-main = filtered[filtered["PERIOD"] == base_period].copy()
-main["DELTA_QTY_7_vs_30"] = main.groupby("SKU NO")["QTY"].transform("sum")
+
+table_period = st.selectbox("Periode Tabel Utama", PERIODS, index=0)
+
+main = filtered[filtered["PERIOD"] == table_period].copy()
+
 main_table = (
-    main.groupby(["SKU NO", "PRODUCT_FINAL", "BRAND", "CATEGORY", "SPEC_FINAL", "PRICE_SEGMENT", "PRICE", "DIVISION"], as_index=False)[["QTY", "STOK_DIVISI"]]
+    main.groupby(["KODE BARANG", "SPEC_FINAL", "PRICE"], as_index=False)[["QTY", "STOK_DIVISI"]]
     .sum()
-    .pivot(index=["SKU NO", "PRODUCT_FINAL", "BRAND", "CATEGORY", "SPEC_FINAL", "PRICE_SEGMENT", "PRICE"], columns="DIVISION", values=["QTY", "STOK_DIVISI"])
+    .pivot(index=["KODE BARANG", "SPEC_FINAL", "PRICE"], columns="DIVISION", values=["QTY", "STOK_DIVISI"])
 )
-main_table.columns = [f"{a}_{b}" for a, b in main_table.columns]
+
+if isinstance(main_table.columns, pd.MultiIndex):
+    main_table.columns = [f"{a}_{b}" for a, b in main_table.columns]
+
 main_table = main_table.fillna(0).reset_index()
+
 for d in DIVISIONS:
     if f"QTY_{d}" not in main_table.columns:
         main_table[f"QTY_{d}"] = 0
     if f"STOK_DIVISI_{d}" not in main_table.columns:
         main_table[f"STOK_DIVISI_{d}"] = 0
-main_table["QTY_TOTAL"] = main_table[[f"QTY_{d}" for d in DIVISIONS]].sum(axis=1)
-main_table["STOK_TOTAL"] = main_table[[f"STOK_DIVISI_{d}" for d in DIVISIONS]].sum(axis=1)
-main_table["SELL_THRU_%"] = np.where(main_table["STOK_TOTAL"] > 0, main_table["QTY_TOTAL"] / main_table["STOK_TOTAL"] * 100, np.nan)
-main_table = main_table.sort_values(["QTY_TOTAL", "SELL_THRU_%"], ascending=[False, False])
-st.dataframe(main_table, use_container_width=True, height=420)
 
-# =========================================================
-# Top summary blocks
-# =========================================================
-left, right = st.columns(2)
-with left:
-    st.markdown("### Top 10 Product")
-    t = top_table(filtered, "PRODUCT_FINAL", 10)
-    st.dataframe(t[["PRODUCT_FINAL", "QTY_DIV03", "QTY_DIV04", "QTY_DIV05", "QTY_TOTAL", "STOK_TOTAL", "SELL_THRU_%"]], use_container_width=True, height=340)
-with right:
-    st.markdown("### Top 10 Brand")
-    t = top_table(filtered, "BRAND", 10)
-    st.dataframe(t[["BRAND", "QTY_DIV03", "QTY_DIV04", "QTY_DIV05", "QTY_TOTAL", "STOK_TOTAL", "SELL_THRU_%"]], use_container_width=True, height=340)
+main_table = main_table.rename(columns={
+    "KODE BARANG": "KODEBARANG",
+    "SPEC_FINAL": "SPESIFIKASI",
+    "PRICE": "M3",
+    "QTY_DIV03": "03 OLP QTY",
+    "STOK_DIVISI_DIV03": "03 OLP STOK",
+    "QTY_DIV04": "04 MOD QTY",
+    "STOK_DIVISI_DIV04": "04 MOD STOK",
+    "QTY_DIV05": "05 OLR QTY",
+    "STOK_DIVISI_DIV05": "05 OLR STOK",
+})
 
-# =========================================================
-# Lower analysis cards
-# =========================================================
-segment_table = compare_table(filtered, "PRICE_SEGMENT")
-brand_table = compare_table(filtered, "BRAND")
-spec_table = compare_table(filtered, "SPEC_FINAL")
+main_table["M3"] = main_table["M3"] / 1000
 
-render_analysis_cards(segment_table, "PRICE_SEGMENT", "Card Analisa per Segment Harga")
-render_analysis_cards(brand_table.head(18), "BRAND", "Card Analisa per Brand")
-render_analysis_cards(spec_table.head(18), "SPEC_FINAL", "Card Analisa per Spesifikasi", sort_az=True)
+ordered_cols = [
+    "KODEBARANG",
+    "SPESIFIKASI",
+    "M3",
+    "03 OLP QTY",
+    "03 OLP STOK",
+    "04 MOD QTY",
+    "04 MOD STOK",
+    "05 OLR QTY",
+    "05 OLR STOK",
+]
 
-# =========================================================
-# Alert table
-# =========================================================
-st.markdown("### Alert 7DAY vs 30DAY")
-alert_basis = st.selectbox("Basis alert", ["PRODUCT_FINAL", "BRAND", "SPEC_FINAL", "PRICE_SEGMENT", "CATEGORY"])
-alert = trend_table(filtered, alert_basis)
-st.dataframe(alert, use_container_width=True, height=340)
+for col in ordered_cols:
+    if col not in main_table.columns:
+        main_table[col] = 0 if "QTY" in col or "STOK" in col or col == "M3" else ""
 
+main_table = main_table[ordered_cols].sort_values(["KODEBARANG", "SPESIFIKASI"], ascending=[True, True])
+
+st.dataframe(main_table, use_container_width=True, height=520)
 # =========================================================
 # Download outputs
 # =========================================================
