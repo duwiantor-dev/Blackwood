@@ -63,7 +63,6 @@ st.markdown(
     table.report td:not(:nth-child(1)):not(:nth-child(2)):not(:nth-child(3)) {
         text-align:right;
     }
-    .small-note {font-size:12px; color:#666;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -113,11 +112,22 @@ def area_code_matches(value, prefixes: List[str]) -> bool:
     txt = str(value).strip().upper().replace(" ", "")
     return any(txt.startswith(p) for p in prefixes)
 
+def flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    cols = []
+    for col in out.columns:
+        if isinstance(col, tuple):
+            parts = [str(x) for x in col if str(x) not in ["", "nan", "None"]]
+            cols.append("|".join(parts))
+        else:
+            cols.append(str(col))
+    out.columns = cols
+    return out
+
 # =========================================================
 # MPLSSR
 # =========================================================
 def load_mplssr(file) -> pd.DataFrame:
-    # Header row 2, data row 7
     df = pd.read_excel(file, sheet_name="ALL", header=1)
     df = df.iloc[4:].copy().reset_index(drop=True)
     df.columns = [str(c).strip() for c in df.columns]
@@ -162,19 +172,16 @@ def load_mplssr(file) -> pd.DataFrame:
 # PRICELIST
 # =========================================================
 def parse_pricelist_sheet(xls: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
-    raw = xls.parse(sheet_name=sheet_name, header=None)
-    raw = raw.copy()
+    raw = xls.parse(sheet_name=sheet_name, header=None).copy()
 
-    # Hapus block COMING - END COMING khusus sheet laptop
     if sheet_name.upper() == "LAPTOP":
         coming_idx = first_row_contains_text(raw, "COMING")
         end_coming_idx = first_row_contains_text(raw, "END COMING")
         if coming_idx is not None and end_coming_idx is not None and end_coming_idx >= coming_idx:
             raw = raw.drop(index=range(coming_idx, end_coming_idx + 1)).reset_index(drop=True)
 
-    # Header row 2, data row 6
     row1 = raw.iloc[1].tolist()
-    row2 = _ffill_header(raw.iloc[2].tolist())  # kode area/group row 3
+    row2 = _ffill_header(raw.iloc[2].tolist())
     row3 = [str(x).strip().upper() if pd.notna(x) and str(x).strip() != "" else None for x in raw.iloc[3].tolist()]
 
     columns = []
@@ -203,7 +210,6 @@ def parse_pricelist_sheet(xls: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
     df = df[df["KODEBARANG"].notna()].copy()
     df = df[~df["KODEBARANG"].isin(["TOTAL"])]
 
-    # Stok per area dari row 3
     stock03_cols = [columns[i] for i, area in enumerate(row3) if area_code_matches(area, ["3", "03"])]
     stock04_cols = [columns[i] for i, area in enumerate(row3) if area_code_matches(area, ["4", "04"])]
     stock05_cols = [columns[i] for i, area in enumerate(row3) if area_code_matches(area, ["5", "05"])]
@@ -246,18 +252,17 @@ def build_master(sales: pd.DataFrame, stock: pd.DataFrame) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = np.nan
 
-    df["KODEBARANG"] = df["KODE BARANG"]
+    df["KODEBARANG"] = normalize_text(df["KODE BARANG"])
     df["SPESIFIKASI_FINAL"] = df["SPESIFIKASI_sales"].fillna(df.get("SPESIFIKASI_stock"))
     df["PRODUCT_FINAL"] = df["PRODUCT_sales"].fillna(df.get("PRODUCT_stock"))
     df["BRAND"] = normalize_text(df["BRAND"])
     df["QTY"] = to_num(df["QTY"]).fillna(0)
 
-    stok_map = {"DIV03": "STOK_DIV03", "DIV04": "STOK_DIV04", "DIV05": "STOK_DIV05"}
-    df["STOK_DIVISI"] = df.apply(lambda r: pd.to_numeric(r.get(stok_map[r["DIVISION"]]), errors="coerce"), axis=1).fillna(0)
+    stock_map = {"DIV03": "STOK_DIV03", "DIV04": "STOK_DIV04", "DIV05": "STOK_DIV05"}
+    df["STOK_DIVISI"] = df.apply(lambda r: pd.to_numeric(r.get(stock_map[r["DIVISION"]]), errors="coerce"), axis=1).fillna(0)
     return df
 
 def build_main_table(filtered: pd.DataFrame) -> pd.DataFrame:
-    # QTY dari MPLSSR
     qty = (
         filtered.pivot_table(
             index=["KODEBARANG", "SPESIFIKASI_FINAL", "PRICE"],
@@ -268,8 +273,8 @@ def build_main_table(filtered: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
+    qty = flatten_columns(qty)
 
-    # STOK dari pricelist, direplikasi ke setiap period agar format sama seperti contoh
     stock_src = (
         filtered[["KODEBARANG", "SPESIFIKASI_FINAL", "PRICE", "DIVISION", "STOK_DIVISI"]]
         .drop_duplicates()
@@ -285,6 +290,7 @@ def build_main_table(filtered: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
+    stock_piv = flatten_columns(stock_piv)
 
     out = qty.merge(stock_piv, how="outer", on=["KODEBARANG", "SPESIFIKASI_FINAL", "PRICE"])
     out = out.fillna(0)
@@ -299,7 +305,7 @@ def build_main_table(filtered: pd.DataFrame) -> pd.DataFrame:
     for period in PERIODS:
         period_label = {"7DAY": "7 DAY ANALISA", "14DAY": "14 DAY ANALISA", "30DAY": "30 DAY ANALISA"}[period]
         for div in DIVISIONS:
-            qty_col = ("QTY", period, div)
+            qty_col = f"{period}|{div}"
             if qty_col in out.columns:
                 final[f"{period_label}|{div_name[div]}|QTY"] = to_num(out[qty_col]).fillna(0)
             else:
@@ -426,7 +432,7 @@ if filtered.empty:
     st.stop()
 
 st.markdown("### Tabel Utama Analisa")
-st.caption("Angka QTY di tabel ini diambil dari MPLSSR. Angka STOK diambil dari Pricelist.")
+st.caption("Error tadi terjadi karena hasil pivot masih berbentuk MultiIndex, lalu digabung dengan kolom biasa saat merge. Di file ini bagian itu sudah dirapikan sebelum merge.")
 
 main_table = build_main_table(filtered)
 render_exact_header_table(main_table)
