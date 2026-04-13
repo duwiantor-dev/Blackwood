@@ -399,7 +399,7 @@ def render_exact_header_table(df: pd.DataFrame):
 # UI
 # =========================================================
 st.title("Dashboard Analisa Sales vs Stock")
-st.caption("QTY diambil dari MPLSSR. STOK dan harga diambil dari Pricelist. Segmentasi menampilkan QTY per 7 DAY, 14 DAY, dan 30 DAY.")
+st.caption("QTY diambil dari MPLSSR. STOK dan harga diambil dari Pricelist.")
 
 st.sidebar.header("Upload File")
 mplssr_file = st.sidebar.file_uploader("Upload MPLSSR", type=["xlsx", "xls"])
@@ -414,7 +414,8 @@ st.sidebar.caption("""- QTY: MPLSSR
 - Pricelist: header row 2, data row 6
 - 05 OLR cek kode area row 3
 - Sheet LAPTOP hapus COMING s/d END COMING
-- Gunakan tombol PROSES setelah pilih filter""")
+- Gunakan tombol PROSES setelah pilih filter
+- Filter range harga di sidebar dihapus""")
 
 if not mplssr_file or not pricelist_file:
     st.info("Silakan upload file MPLSSR dan Pricelist.")
@@ -436,7 +437,6 @@ with st.sidebar:
     with st.form("filter_form"):
         selected_products = st.multiselect("Product", product_options, default=default_product)
         selected_brands = st.multiselect("Brand", sorted(master["BRAND"].dropna().unique().tolist()))
-        selected_segments = st.multiselect("Segment Harga", [s[2] for s in PRICE_SEGMENTS] + ["UNKNOWN"])
         process_clicked = st.form_submit_button("PROSES", use_container_width=True)
 
 if "filter_submitted" not in st.session_state:
@@ -454,8 +454,6 @@ if selected_products:
     filtered = filtered[filtered["PRODUCT_FINAL"].isin(selected_products)]
 if selected_brands:
     filtered = filtered[filtered["BRAND"].isin(selected_brands)]
-if selected_segments:
-    filtered = filtered[filtered["PRICE_SEGMENT"].isin(selected_segments)]
 
 if filtered.empty:
     st.warning("Data kosong setelah filter diterapkan.")
@@ -466,8 +464,8 @@ if filtered.empty:
 # SEGMENTATION CARDS
 # =========================================================
 
-def build_segment_table(df):
-    tmp = df.copy()
+def build_segment_table(df, period):
+    tmp = df[df["PERIOD"] == period].copy()
     tmp["SEGMENT"] = tmp["PRICE"].apply(price_segment)
     seg = tmp.groupby(["SEGMENT", "DIVISION"])["QTY"].sum().unstack().fillna(0).reset_index()
     for div in DIVISIONS:
@@ -478,26 +476,9 @@ def build_segment_table(df):
     seg.columns = ["SEGMENT", "DIV 03", "DIV 04", "DIV 05"]
     return seg
 
-def build_segment_period_table(df):
-    tmp = df.copy()
-    tmp["SEGMENT"] = tmp["PRICE"].apply(price_segment)
-    piv = tmp.pivot_table(
-        index="SEGMENT",
-        columns="PERIOD",
-        values="QTY",
-        aggfunc="sum",
-        fill_value=0,
-    ).reset_index()
-    for p in PERIODS:
-        if p not in piv.columns:
-            piv[p] = 0
-    piv = piv[["SEGMENT", "7DAY", "14DAY", "30DAY"]].copy()
-    piv = piv.sort_values("SEGMENT", key=lambda s: s.map(segment_sort_key)).reset_index(drop=True)
-    piv.columns = ["SEGMENT", "7 DAY", "14 DAY", "30 DAY"]
-    return piv
-
-def build_brand_table(df):
-    brand = df.groupby(["BRAND", "DIVISION"])["QTY"].sum().unstack().fillna(0).reset_index()
+def build_brand_table(df, period):
+    brand = df[df["PERIOD"] == period].copy()
+    brand = brand.groupby(["BRAND", "DIVISION"])["QTY"].sum().unstack().fillna(0).reset_index()
     for div in DIVISIONS:
         if div not in brand.columns:
             brand[div] = 0
@@ -505,23 +486,6 @@ def build_brand_table(df):
     brand["TOTAL"] = brand[["DIV03", "DIV04", "DIV05"]].sum(axis=1)
     brand = brand.sort_values(["TOTAL", "BRAND"], ascending=[False, True]).head(10).drop(columns=["TOTAL"])
     brand.columns = ["BRAND", "DIV 03", "DIV 04", "DIV 05"]
-    return brand
-
-def build_brand_period_table(df):
-    brand = df.pivot_table(
-        index="BRAND",
-        columns="PERIOD",
-        values="QTY",
-        aggfunc="sum",
-        fill_value=0,
-    ).reset_index()
-    for p in PERIODS:
-        if p not in brand.columns:
-            brand[p] = 0
-    brand["TOTAL"] = brand[["7DAY", "14DAY", "30DAY"]].sum(axis=1)
-    brand = brand.sort_values(["TOTAL", "BRAND"], ascending=[False, True]).head(10).drop(columns=["TOTAL"])
-    brand = brand[["BRAND", "7DAY", "14DAY", "30DAY"]].copy()
-    brand.columns = ["BRAND", "7 DAY", "14 DAY", "30 DAY"]
     return brand
 
 def render_left_table(df, title):
@@ -552,13 +516,22 @@ def render_left_table(df, title):
     html.append("</tbody></table></div></div>")
     st.markdown("".join(html), unsafe_allow_html=True)
 
+seg_filter_col1, seg_filter_col2 = st.columns([1, 3])
+with seg_filter_col1:
+    segmentasi_period = st.selectbox(
+        "Filter Segmentasi",
+        PERIODS,
+        index=0,
+        key="segmentasi_period_top",
+    )
+
 left, right = st.columns(2)
 
 with left:
-    render_left_table(build_segment_period_table(filtered), "Segmentasi Harga")
+    render_left_table(build_segment_table(filtered, segmentasi_period), f"Segmentasi Harga - {segmentasi_period}")
 
 with right:
-    render_left_table(build_brand_period_table(filtered), "Segmentasi Brand")
+    render_left_table(build_brand_table(filtered, segmentasi_period), f"Segmentasi Brand - {segmentasi_period}")
 
 
 st.markdown("### Tabel Utama Analisa")
