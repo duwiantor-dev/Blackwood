@@ -218,6 +218,22 @@ def normalize_warehouse_code(value) -> str:
     txt = txt.replace("0A", "A").replace("0B", "B").replace("0C", "C")
     return txt
 
+
+def normalize_sales_pivot_gudang(value) -> str:
+    if pd.isna(value):
+        return np.nan
+    txt = str(value).strip().upper()
+    if "-" in txt:
+        txt = txt.split("-", 1)[1]
+    txt = txt.replace(" ", "")
+    m = re.match(r"([A-Z]+)0*(\d+[A-Z]?)$", txt)
+    if m:
+        prefix = m.group(1)
+        suffix = m.group(2)
+        return f"{prefix} {suffix}"
+    return txt
+
+
 # =========================================================
 # MPLSSR
 # =========================================================
@@ -409,8 +425,8 @@ def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
             default_stock_cols.append(col)
         if group_clean == "JKT":
             jkt_stock_cols.append(col)
-        if wh_clean:
-            warehouse_stock_cols[wh_clean] = col
+        if group_clean and wh_clean:
+            warehouse_stock_cols[f"{group_clean} {wh_clean}"] = col
 
     keep_cols = ["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "PRICE"] + list(set(default_stock_cols + jkt_stock_cols + list(warehouse_stock_cols.values())))
     out = df[keep_cols].copy()
@@ -456,7 +472,7 @@ def load_sales_pivot(file) -> pd.DataFrame:
 
     df = raw[[kode_gudang_col, kode_barang_col, qty_col]].copy()
     df.columns = ["KODE GUDANG", "KODE BARANG", "QTY"]
-    df["KODE GUDANG"] = normalize_text(df["KODE GUDANG"])
+    df["KODE GUDANG"] = df["KODE GUDANG"].apply(normalize_sales_pivot_gudang)
     df["KODE BARANG"] = normalize_text(df["KODE BARANG"])
     df["QTY"] = to_num(df["QTY"]).fillna(0)
 
@@ -486,41 +502,36 @@ def build_sales_pivot_alerts(sales_pivot: pd.DataFrame, pricelist_wh: pd.DataFra
 
     merged = base.merge(pl, how="left", left_on="KODE BARANG", right_on="KODEBARANG")
 
-    ready_codes = ["1A", "3A", "3B", "3C", "4A", "4B", "5B"]
+    ready_codes = ["RAM 1A", "RAM 3A", "RAM 3B", "RAM 3C", "RAM 4A", "RAM 4B", "RAM 5B"]
 
     def find_stock_col_by_code(code):
-        exact_col = warehouse_stock_cols.get(code)
+        if pd.isna(code):
+            return None
+        code_clean = str(code).strip().upper()
+        exact_col = warehouse_stock_cols.get(code_clean)
         if exact_col and exact_col in merged.columns:
             return exact_col
 
-        code_clean = str(code).strip().upper()
+        compact = code_clean.replace(" ", "")
         for col in merged.columns:
             col_txt = str(col).strip().upper().replace(" ", "")
-            if f"__{code_clean}" in col_txt or col_txt.endswith(code_clean):
+            if compact in col_txt:
                 return col
         return None
 
     ready_cols = {code: find_stock_col_by_code(code) for code in ready_codes}
 
     def get_current_stock(row):
-        gudang_code = normalize_warehouse_code(row.get("KODE GUDANG"))
-        stock_col = warehouse_stock_cols.get(gudang_code)
+        gudang_code = row.get("KODE GUDANG")
+        stock_col = find_stock_col_by_code(gudang_code)
 
         if stock_col and stock_col in row.index:
             val = pd.to_numeric(row[stock_col], errors="coerce")
             return 0 if pd.isna(val) else float(val)
-
-        # fallback: try partial match from merged columns
-        if gudang_code:
-            for col in merged.columns:
-                col_txt = str(col).strip().upper().replace(" ", "")
-                if f"__{gudang_code}" in col_txt or col_txt.endswith(str(gudang_code)):
-                    val = pd.to_numeric(row.get(col), errors="coerce")
-                    return 0 if pd.isna(val) else float(val)
         return 0.0
 
     def get_ready_warehouses(row):
-        current_code = normalize_warehouse_code(row.get("KODE GUDANG"))
+        current_code = str(row.get("KODE GUDANG")).strip().upper()
         ready_list = []
         for code in ready_codes:
             if code == current_code:
