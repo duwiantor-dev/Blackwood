@@ -71,7 +71,7 @@ st.markdown(
         border-radius: 8px;
         background: #fff;
         overflow: auto;
-        max-height: 360px;
+        max-height: 520px;
     }
     table.alert-table {
         border-collapse: collapse;
@@ -232,6 +232,25 @@ def normalize_sales_pivot_gudang(value) -> str:
         suffix = m.group(2)
         return f"{prefix} {suffix}"
     return txt
+
+
+def normalize_team_code(value) -> str:
+    if pd.isna(value):
+        return np.nan
+    txt = str(value).strip().upper()
+    if "-" in txt:
+        txt = txt.split("-", 1)[1]
+    txt = txt.replace(" ", "")
+    m = re.match(r"([A-Z]+)0*(\d+)$", txt)
+    if m:
+        return f"{m.group(1)} {int(m.group(2))}A"
+    m = re.match(r"([A-Z]+)0*(\d+)([A-Z])$", txt)
+    if m:
+        return f"{m.group(1)} {int(m.group(2))}{m.group(3)}"
+    return txt
+
+def ensure_datetime(series: pd.Series) -> pd.Series:
+    return pd.to_datetime(series, errors="coerce")
 
 
 # =========================================================
@@ -428,7 +447,11 @@ def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
         if group_clean and wh_clean:
             warehouse_stock_cols[f"{group_clean} {wh_clean}"] = col
 
-    keep_cols = ["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "PRICE"] + list(set(default_stock_cols + jkt_stock_cols + list(warehouse_stock_cols.values())))
+    if "BRAND" not in df.columns:
+        df["BRAND"] = np.nan
+    df["BRAND"] = normalize_text(df["BRAND"])
+    df["PRICE_SEGMENT"] = df["PRICE"].apply(price_segment)
+    keep_cols = ["SKU NO", "PRODUCT", "BRAND", "KODEBARANG", "SPESIFIKASI", "PRICE", "PRICE_SEGMENT"] + list(set(default_stock_cols + jkt_stock_cols + list(warehouse_stock_cols.values())))
     out = df[keep_cols].copy()
     out = out.loc[:, ~out.columns.duplicated()].copy()
     out["DEFAULT_STOCK_TOTAL"] = df.loc[:, ~df.columns.duplicated()][default_stock_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1) if default_stock_cols else 0
@@ -460,139 +483,152 @@ def load_sales_pivot(file) -> pd.DataFrame:
     raw.columns = [str(c).strip().upper() for c in raw.columns]
     raw = raw.loc[:, ~pd.Index(raw.columns).duplicated()].copy()
 
-    kode_gudang_col = next((c for c in raw.columns if "KODE GUDANG" in c or "KODEGUDANG" in c or c == "GUDANG"), None)
+    team_col = next((c for c in raw.columns if c == "TEAM" or "TEAM" in c), None)
     kode_barang_col = next((c for c in raw.columns if "KODE BARANG" in c or "KODEBARANG" in c), None)
-    qty_col = next((c for c in raw.columns if "QTY" in c or "PCS" in c or "TERJUAL" in c), None)
+    qty_col = next((c for c in raw.columns if c == "QTY" or "QTY" in c or "PCS" in c or "TERJUAL" in c), None)
+    tgl_col = next((c for c in raw.columns if c == "TGL" or "TGL" in c), None)
 
-    if kode_gudang_col is None or kode_barang_col is None or qty_col is None:
+    if team_col is None or kode_barang_col is None or qty_col is None or tgl_col is None:
         raise ValueError(
             f"Format SALES PIVOT tidak cocok. Kolom terbaca: {list(raw.columns)}. "
-            "Pastikan header row 2 berisi GUDANG/KODE GUDANG, KODE BARANG, dan QTY."
+            "Pastikan header row 2 berisi TEAM, KODE BARANG, QTY, dan TGL."
         )
 
-    df = raw[[kode_gudang_col, kode_barang_col, qty_col]].copy()
-    df.columns = ["KODE GUDANG", "KODE BARANG", "QTY"]
-    df["KODE GUDANG"] = df["KODE GUDANG"].apply(normalize_sales_pivot_gudang)
+    df = raw[[team_col, kode_barang_col, qty_col, tgl_col]].copy()
+    df.columns = ["TEAM", "KODE BARANG", "QTY", "TGL"]
+    df["TEAM"] = df["TEAM"].apply(normalize_team_code)
     df["KODE BARANG"] = normalize_text(df["KODE BARANG"])
     df["QTY"] = to_num(df["QTY"]).fillna(0)
+    df["TGL"] = ensure_datetime(df["TGL"])
 
-    df = df[df["KODE GUDANG"].notna()].copy()
+    df = df[df["TEAM"].notna()].copy()
     df = df[df["KODE BARANG"].notna()].copy()
     df = df[df["QTY"] > 0].copy()
+    df = df[df["TGL"].notna()].copy()
 
-    return (
-        df.groupby(["KODE GUDANG", "KODE BARANG"], as_index=False)["QTY"]
-        .sum()
-        .sort_values(["QTY", "KODE GUDANG", "KODE BARANG"], ascending=[False, True, True])
-        .reset_index(drop=True)
-    )
+    if df.empty:
+        return pd.DataFrame(columns=["TEAM", "KODE BARANG", "QTY", "TGL", "PERIOD"])
 
-def build_sales_pivot_alerts(sales_pivot: pd.DataFrame, pricelist_wh: pd.DataFrame, warehouse_stock_cols: dict) -> pd.DataFrame:
-    empty_cols = ["KODE GUDANG", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY"]
+    max_date = df["TGL"].max().normalize()
+
+    period_frames = []
+    for days, label in [(7, "7DAY"), (14, "14DAY"), (30, "30DAY")]:
+        start_date = max_date - pd.Timedelta(days=days - 1)
+        tmp = df[df["TGL"].dt.normalize() >= start_date].copy()
+        if tmp.empty:
+            continue
+        agg = (
+            tmp.groupby(["TEAM", "KODE BARANG"], as_index=False)["QTY"]
+            .sum()
+        )
+        agg["PERIOD"] = label
+        period_frames.append(agg)
+
+    if not period_frames:
+        return pd.DataFrame(columns=["TEAM", "KODE BARANG", "QTY", "PERIOD"])
+
+    return pd.concat(period_frames, ignore_index=True).sort_values(
+        ["PERIOD", "QTY", "TEAM", "KODE BARANG"], ascending=[True, False, True, True]
+    ).reset_index(drop=True)
+
+def build_sales_pivot_alerts(
+    sales_pivot: pd.DataFrame,
+    pricelist_wh: pd.DataFrame,
+    warehouse_stock_cols: dict,
+    period: str,
+    selected_products=None,
+    selected_brands=None,
+    selected_segments=None,
+) -> pd.DataFrame:
+    empty_cols = ["TEAM", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY"]
     if sales_pivot.empty or pricelist_wh.empty:
         return pd.DataFrame(columns=empty_cols)
 
-    base = sales_pivot.copy()
+    base = sales_pivot[sales_pivot["PERIOD"] == period].copy()
     if base.empty:
         return pd.DataFrame(columns=empty_cols)
+
+    base = (
+        base.groupby(["TEAM", "KODE BARANG"], as_index=False)["QTY"]
+        .sum()
+    )
 
     pl = pricelist_wh.copy()
     if "KODEBARANG" not in pl.columns:
         return pd.DataFrame(columns=empty_cols)
 
+    if selected_products:
+        pl = pl[pl["PRODUCT"].isin(selected_products)]
+    if selected_brands:
+        pl = pl[pl["BRAND"].isin(selected_brands)]
+    if selected_segments:
+        pl = pl[pl["PRICE_SEGMENT"].isin(selected_segments)]
+
     merged = base.merge(pl, how="left", left_on="KODE BARANG", right_on="KODEBARANG")
 
-    ready_codes = ["RAM 1A", "RAM 3A", "RAM 3B", "RAM 3C", "RAM 4A", "RAM 4B", "RAM 5B"]
-
-    def find_stock_col_by_code(code):
-        if pd.isna(code):
+    def find_stock_col_by_team(team_code):
+        if pd.isna(team_code):
             return None
-        code_clean = str(code).strip().upper()
-        exact_col = warehouse_stock_cols.get(code_clean)
+        team_code = str(team_code).strip().upper()
+        exact_col = warehouse_stock_cols.get(team_code)
         if exact_col and exact_col in merged.columns:
             return exact_col
-
-        compact = code_clean.replace(" ", "")
+        compact = team_code.replace(" ", "")
         for col in merged.columns:
             col_txt = str(col).strip().upper().replace(" ", "")
             if compact in col_txt:
                 return col
         return None
 
-    ready_cols = {code: find_stock_col_by_code(code) for code in ready_codes}
+    all_ready_codes = sorted([str(k).strip().upper() for k in warehouse_stock_cols.keys() if str(k).strip().upper() != "DEFAULT"])
 
     def get_current_stock(row):
-        gudang_code = row.get("KODE GUDANG")
-        stock_col = find_stock_col_by_code(gudang_code)
-
+        stock_col = find_stock_col_by_team(row.get("TEAM"))
         if stock_col and stock_col in row.index:
             val = pd.to_numeric(row[stock_col], errors="coerce")
             return 0 if pd.isna(val) else float(val)
         return 0.0
 
     def get_ready_warehouses(row):
-        current_code = str(row.get("KODE GUDANG")).strip().upper()
+        current_team = str(row.get("TEAM")).strip().upper()
         ready_list = []
-        for code in ready_codes:
-            if code == current_code:
+        for team_code in all_ready_codes:
+            if team_code == current_team:
                 continue
-            stock_col = ready_cols.get(code)
+            stock_col = find_stock_col_by_team(team_code)
             if not stock_col:
                 continue
             val = pd.to_numeric(row.get(stock_col), errors="coerce")
             val = 0 if pd.isna(val) else float(val)
             if val > 0:
-                ready_list.append(code)
+                ready_list.append(team_code)
         return ", ".join(ready_list)
 
-    merged["SPESIFIKASI"] = merged.get("SPESIFIKASI")
+    merged["SPESIFIKASI"] = merged.get("SPESIFIKASI", "").fillna("")
     merged["STOK"] = merged.apply(get_current_stock, axis=1)
     merged["GUDANG READY"] = merged.apply(get_ready_warehouses, axis=1)
     merged["KET"] = np.where(
-        (to_num(merged["QTY"]).fillna(0) > 0) &
+        (to_num(merged["QTY"]).fillna(0) > to_num(merged["STOK"]).fillna(0)) &
         (to_num(merged["STOK"]).fillna(0) <= 0) &
         (merged["GUDANG READY"].astype(str).str.strip() != ""),
         "REFILL",
-        ""
+        np.where(
+            (to_num(merged["QTY"]).fillna(0) > to_num(merged["STOK"]).fillna(0)),
+            "CEK",
+            ""
+        )
     )
 
-    # Fokus munculkan tabel dulu:
-    # - prioritas baris REFILL
-    # - kalau belum ada REFILL, tetap tampilkan kandidat terdekat
-    refill_df = merged[merged["KET"] == "REFILL"].copy()
-
-    if refill_df.empty:
-        merged["KET"] = np.where(
-            (to_num(merged["QTY"]).fillna(0) > 0) &
-            (to_num(merged["STOK"]).fillna(0) <= 0),
-            "CEK",
-            merged["KET"]
-        )
-        candidate_df = merged[(to_num(merged["QTY"]).fillna(0) > 0) & (to_num(merged["STOK"]).fillna(0) <= 0)].copy()
-        work_df = candidate_df
-    else:
-        work_df = refill_df
-
+    work_df = merged[merged["KET"] != ""].copy()
     if work_df.empty:
-        # Last fallback: tampilkan top sales pivot agar tabel tetap muncul
-        work_df = merged.copy()
-        work_df["KET"] = np.where(work_df["KET"].astype(str).str.strip() == "", "CEK", work_df["KET"])
+        return pd.DataFrame(columns=empty_cols)
 
-    work_df["SPESIFIKASI"] = work_df["SPESIFIKASI"].fillna("")
-    work_df["QTY"] = to_num(work_df["QTY"]).fillna(0)
-    work_df["STOK"] = to_num(work_df["STOK"]).fillna(0)
-    work_df["KEBUTUHAN_STOK"] = work_df["QTY"] - work_df["STOK"]
-
-    out = work_df[["KODE GUDANG", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY", "KEBUTUHAN_STOK"]].copy()
+    work_df["KEBUTUHAN_STOK"] = to_num(work_df["QTY"]).fillna(0) - to_num(work_df["STOK"]).fillna(0)
+    out = work_df[["TEAM", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY", "KEBUTUHAN_STOK"]].copy()
     out["QTY"] = pd.to_numeric(out["QTY"], errors="coerce").fillna(0).round(0).astype(int)
     out["STOK"] = pd.to_numeric(out["STOK"], errors="coerce").fillna(0).round(0).astype(int)
-
-    out = out.sort_values(
-        ["KET", "KEBUTUHAN_STOK", "QTY", "KODE GUDANG", "KODE BARANG"],
-        ascending=[True, False, False, True, True]
-    ).reset_index(drop=True)
-
-    return out[["KODE GUDANG", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY"]]
+    out = out.sort_values(["KEBUTUHAN_STOK", "QTY", "TEAM", "KODE BARANG"], ascending=[False, False, True, True]).reset_index(drop=True)
+    return out[["TEAM", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY"]]
 
 def render_sales_pivot_alert_table(df: pd.DataFrame):
     if df.empty:
@@ -721,9 +757,10 @@ def render_left_table(df, title, selected_division="05 OLR"):
 def build_main_table_filtered(
     df: pd.DataFrame,
     period: str,
-    stock_division_label: str,
+    comparison_division_label: str,
     selected_segments=None,
     selected_brands=None,
+    selected_products=None,
 ) -> pd.DataFrame:
     base = df[df["PERIOD"] == period].copy()
 
@@ -731,6 +768,8 @@ def build_main_table_filtered(
         base = base[base["PRICE"].apply(price_segment).isin(selected_segments)]
     if selected_brands:
         base = base[base["BRAND"].isin(selected_brands)]
+    if selected_products:
+        base = base[base["PRODUCT_FINAL"].isin(selected_products)]
 
     qty = (
         base.groupby(["KODEBARANG", "SPESIFIKASI_FINAL", "PRICE", "DIVISION"], as_index=False)["QTY"]
@@ -752,7 +791,7 @@ def build_main_table_filtered(
     )
 
     stock_label_map = {"03 OLP": "STOK_DIV03", "04 MOD": "STOK_DIV04", "05 OLR": "STOK_DIV05"}
-    stok_col = stock_label_map.get(stock_division_label, "STOK_DIV05")
+    stok_col = "STOK_DIV05"
 
     stock_df = (
         base[["KODEBARANG", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05"]]
@@ -789,28 +828,31 @@ def build_main_table_filtered(
             out[col] = 0 if col not in ["KODEBARANG", "PRODUCT", "BRAND", "SPESIFIKASI"] else ""
 
     out["M3"] = (to_num(out["M3"]).fillna(0) / 1000).round(0)
-    return out[ordered_cols].sort_values(["KODEBARANG", "SPESIFIKASI"], ascending=[True, True]).reset_index(drop=True)
+    compare_map = {"03 OLP": "03 OLP", "04 MOD": "04 MOD", "05 OLR": "05 OLR"}
+    compare_col = compare_map.get(comparison_division_label, "04 MOD")
+    out["SELISIH_KALAH"] = to_num(out[compare_col]).fillna(0) - to_num(out["05 OLR"]).fillna(0)
+    return out[ordered_cols + ["SELISIH_KALAH"]].sort_values(["SELISIH_KALAH", compare_col, "05 OLR"], ascending=[False, False, True]).reset_index(drop=True)
 
-def render_main_table_dynamic(df: pd.DataFrame, selected_division_label: str, selected_stock_division_label: str):
+def render_main_table_dynamic(df: pd.DataFrame, comparison_division_label: str):
     display_df = df.copy()
 
     compare_cols = ["03 OLP", "04 MOD", "05 OLR"]
     stock_hidden_map = {"03 OLP": "STOK_DIV03", "04 MOD": "STOK_DIV04", "05 OLR": "STOK_DIV05"}
-    selected_stock_hidden = stock_hidden_map.get(selected_stock_division_label, "STOK_DIV05")
+    selected_stock_hidden = "STOK_DIV05"
 
     def losing_division(row):
-        current_val = row.get(selected_division_label, 0)
-        other_vals = [row.get(c, 0) for c in compare_cols if c != selected_division_label]
+        current_val = row.get("05 OLR", 0)
+        compare_val = row.get(comparison_division_label, 0)
         try:
-            return any(float(current_val) < float(v) for v in other_vals)
+            return float(current_val) < float(compare_val)
         except Exception:
             return False
 
     def stok_problem(row):
         try:
             stok_selected = float(row.get("STOK", 0))
-            qty_selected = float(row.get(selected_division_label, 0))
-            other_stock_cols = [stock_hidden_map[c] for c in compare_cols if c != selected_stock_division_label]
+            qty_selected = float(row.get("05 OLR", 0))
+            other_stock_cols = [stock_hidden_map[c] for c in compare_cols if c != "05 OLR"]
             other_stock_values = [float(row.get(c, 0)) for c in other_stock_cols]
             cond_a = stok_selected < qty_selected
             cond_b = stok_selected == 0 and qty_selected > 0 and any(v > 0 for v in other_stock_values)
@@ -846,7 +888,7 @@ def render_main_table_dynamic(df: pd.DataFrame, selected_division_label: str, se
         original = display_df.loc[idx]
         for col in visible_df.columns:
             cls = ""
-            if col == selected_division_label and bool(original["_LOSS_DIVISION_FLAG"]):
+            if col == "05 OLR" and bool(original["_LOSS_DIVISION_FLAG"]):
                 cls = ' class="bg-red"'
             if col == "STOK" and bool(original["_STOK_ALERT_FLAG"]):
                 cls = ' class="bg-red"'
@@ -929,76 +971,64 @@ product_options = sorted(master["PRODUCT_FINAL"].dropna().unique().tolist())
 default_product = ["LAPTOP R"] if "LAPTOP R" in product_options else []
 
 st.markdown('<div class="upload-card-wrap">', unsafe_allow_html=True)
-st.markdown("### Filter Produk")
-with st.form("filter_form"):
-    filter_col1, filter_col2, filter_col3 = st.columns([1.2, 1.2, 0.5])
-    with filter_col1:
+st.markdown("### Filter Dashboard")
+with st.form("unified_filter_form"):
+    fcol1, fcol2, fcol3, fcol4, fcol5, fcol6 = st.columns([1.2, 1.2, 1, 1.2, 1.1, 0.6])
+    with fcol1:
         selected_products = st.multiselect("Product", product_options, default=default_product)
-    with filter_col2:
+    with fcol2:
         selected_brands = st.multiselect("Brand", sorted(master["BRAND"].dropna().unique().tolist()))
-    with filter_col3:
+    with fcol3:
+        selected_period = st.selectbox("Period", PERIODS, index=0)
+    with fcol4:
+        selected_segments = st.multiselect("Range Harga", [s[2] for s in PRICE_SEGMENTS] + ["UNKNOWN"])
+    with fcol5:
+        comparison_division = st.selectbox("Perbandingan", ["03 OLP", "04 MOD", "05 OLR"], index=1)
+    with fcol6:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        process_clicked = st.form_submit_button("PROSES", use_container_width=True)
+        apply_filter = st.form_submit_button("PROSES", use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
-
-if "filter_submitted" not in st.session_state:
-    st.session_state["filter_submitted"] = True
-if process_clicked:
-    st.session_state["filter_submitted"] = True
 
 filtered = master.copy()
 if selected_products:
     filtered = filtered[filtered["PRODUCT_FINAL"].isin(selected_products)]
 if selected_brands:
     filtered = filtered[filtered["BRAND"].isin(selected_brands)]
+if selected_segments:
+    filtered = filtered[filtered["PRICE"].apply(price_segment).isin(selected_segments)]
 
 if filtered.empty:
     st.warning("Data kosong setelah filter diterapkan.")
     st.stop()
 
-with st.form("segmentasi_form"):
-    seg_filter_col1, seg_filter_col2, seg_filter_col3 = st.columns([1, 1, 0.5])
-    with seg_filter_col1:
-        segmentasi_period = st.selectbox("Filter Segmentasi", PERIODS, index=0, key="segmentasi_period_top")
-    with seg_filter_col2:
-        selected_division_segment = st.selectbox("Filter Divisi", ["03 OLP", "04 MOD", "05 OLR"], index=2, key="segmentasi_division_top")
-    with seg_filter_col3:
-        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        segmentasi_process = st.form_submit_button("PROSES")
-
 left, right = st.columns(2)
 with left:
-    render_left_table(build_segment_table(filtered, segmentasi_period), f"Segmentasi Harga - {segmentasi_period}", selected_division=selected_division_segment)
+    render_left_table(build_segment_table(filtered, selected_period), f"Segmentasi Harga - {selected_period}", selected_division=comparison_division)
 with right:
-    render_left_table(build_brand_table(filtered, segmentasi_period), f"Segmentasi Brand - {segmentasi_period}", selected_division=selected_division_segment)
+    render_left_table(build_brand_table(filtered, selected_period), f"Segmentasi Brand - {selected_period}", selected_division=comparison_division)
 
-sales_pivot_alerts = build_sales_pivot_alerts(sales_pivot, pricelist_wh, warehouse_stock_cols)
+sales_pivot_alerts = build_sales_pivot_alerts(
+    sales_pivot,
+    pricelist_wh,
+    warehouse_stock_cols,
+    period=selected_period,
+    selected_products=selected_products,
+    selected_brands=selected_brands,
+    selected_segments=selected_segments,
+)
 
 st.markdown("### Tabel Utama Analisa")
-with st.form("main_table_form"):
-    main_filter_col1, main_filter_col2, main_filter_col3, main_filter_col4, main_filter_col5, main_filter_col6 = st.columns([1, 1, 1, 1.4, 1.4, 0.6])
-    with main_filter_col1:
-        main_period = st.selectbox("Filter Period", PERIODS, index=0, key="main_period_filter")
-    with main_filter_col2:
-        main_division_label = st.selectbox("Filter Divisi", ["03 OLP", "04 MOD", "05 OLR"], index=2, key="main_division_filter")
-    with main_filter_col3:
-        main_stock_division = st.selectbox("Filter Stok Divisi", ["03 OLP", "04 MOD", "05 OLR"], index=2, key="main_stock_division_filter")
-    with main_filter_col4:
-        main_segment_filter = st.multiselect("Filter Segmentasi", [s[2] for s in PRICE_SEGMENTS] + ["UNKNOWN"], key="main_segment_filter")
-    with main_filter_col5:
-        main_brand_filter = st.multiselect("Filter Brand", sorted(filtered["BRAND"].dropna().unique().tolist()), key="main_brand_filter")
-    with main_filter_col6:
-        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        main_process = st.form_submit_button("PROSES")
-
 main_table_export = build_main_table_filtered(
     filtered,
-    main_period,
-    main_stock_division,
-    selected_segments=main_segment_filter,
-    selected_brands=main_brand_filter,
+    selected_period,
+    comparison_division,
+    selected_segments=selected_segments,
+    selected_brands=selected_brands,
+    selected_products=selected_products,
 )
-main_table_export = render_main_table_dynamic(main_table_export, main_division_label, main_stock_division)
+main_table_export = render_main_table_dynamic(main_table_export, comparison_division)
 
 st.markdown("### Analisa Stok")
 render_sales_pivot_alert_table(sales_pivot_alerts)
+
+st.markdown("<div style='height:120px;'></div>", unsafe_allow_html=True)
