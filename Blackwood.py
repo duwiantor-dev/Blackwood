@@ -256,7 +256,7 @@ def load_mplssr(file) -> pd.DataFrame:
         columns=["PRODUCT", "BRAND", "KODE BARANG", "SPESIFIKASI", "PERIOD", "DIVISION", "QTY"]
     )
     out["MERGE_KEY"] = normalize_text(out["KODE BARANG"])
-    out["SKU NO"] = out["MERGE_KEY"]
+    out["KODE BARANG"] = out["MERGE_KEY"]
     return out
 
 # =========================================================
@@ -290,11 +290,11 @@ def parse_pricelist_sheet(xls: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
     df = raw.iloc[5:].copy().reset_index(drop=True)
     df.columns = columns
 
-    for c in ["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "TOT", "M3"]:
+    for c in ["KODE BARANG", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "TOT", "M3"]:
         if c not in df.columns:
             df[c] = np.nan
 
-    df["SKU NO"] = normalize_text(df["SKU NO"])
+    df["KODE BARANG"] = normalize_text(df["KODE BARANG"])
     df["PRODUCT"] = normalize_text(df["PRODUCT"])
     df["KODEBARANG"] = normalize_text(df["KODEBARANG"])
     df["SPESIFIKASI"] = normalize_text(df["SPESIFIKASI"])
@@ -315,7 +315,7 @@ def parse_pricelist_sheet(xls: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
     df["MERGE_KEY"] = df["KODEBARANG"]
 
     return df[[
-        "SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "PRICE",
+        "KODE BARANG", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "PRICE",
         "STOK_DIV03", "STOK_DIV04", "STOK_DIV05",
         "CATEGORY", "PRICE_SEGMENT", "MERGE_KEY"
     ]]
@@ -326,7 +326,7 @@ def load_pricelist(file) -> pd.DataFrame:
     frames = [parse_pricelist_sheet(xls, s) for s in sheets]
     if not frames:
         return pd.DataFrame(columns=[
-            "SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "PRICE",
+            "KODE BARANG", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "PRICE",
             "STOK_DIV03", "STOK_DIV04", "STOK_DIV05",
             "CATEGORY", "PRICE_SEGMENT", "MERGE_KEY"
         ])
@@ -376,11 +376,11 @@ def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
     df = raw.iloc[5:].copy().reset_index(drop=True)
     df.columns = columns
 
-    for c in ["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "M3"]:
+    for c in ["KODE BARANG", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "M3"]:
         if c not in df.columns:
             df[c] = np.nan
 
-    df["SKU NO"] = normalize_text(df["SKU NO"])
+    df["KODE BARANG"] = normalize_text(df["KODE BARANG"])
     df["PRODUCT"] = normalize_text(df["PRODUCT"])
     df["KODEBARANG"] = normalize_text(df["KODEBARANG"])
     df["SPESIFIKASI"] = normalize_text(df["SPESIFIKASI"])
@@ -404,7 +404,7 @@ def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
         if wh_clean:
             warehouse_stock_cols[wh_clean] = col
 
-    keep_cols = ["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "PRICE"] + list(set(default_stock_cols + list(warehouse_stock_cols.values())))
+    keep_cols = ["KODE BARANG", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "PRICE"] + list(set(default_stock_cols + list(warehouse_stock_cols.values())))
     out = df[keep_cols].copy()
     out = out.loc[:, ~out.columns.duplicated()].copy()
     out["DEFAULT_STOCK_TOTAL"] = df.loc[:, ~df.columns.duplicated()][default_stock_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1) if default_stock_cols else 0
@@ -425,7 +425,7 @@ def load_pricelist_with_warehouses(file):
 
     out = pd.concat(frames, ignore_index=True)
     out = out.loc[:, ~out.columns.duplicated()]
-    out = out.drop_duplicates(subset=["SKU NO", "KODEBARANG"], keep="first").reset_index(drop=True)
+    out = out.drop_duplicates(subset=["KODE BARANG", "KODEBARANG"], keep="first").reset_index(drop=True)
     return out, merged_map
 
 # =========================================================
@@ -460,24 +460,24 @@ def load_sales_pivot(file) -> pd.DataFrame:
         raise ValueError("Format SALES PIVOT tidak cocok. Pastikan ada kolom GUDANG, SKU NO, dan QTY.")
 
     df = df[[gudang_col, sku_col, qty_col]].copy()
-    df.columns = ["GUDANG_RAW", "SKU NO", "QTY"]
-    df["SKU NO"] = normalize_text(df["SKU NO"])
+    df.columns = ["GUDANG_RAW", "KODE BARANG", "QTY"]
+    df["KODE BARANG"] = normalize_text(df["KODE BARANG"])
     df["QTY"] = to_num(df["QTY"]).fillna(0)
     df["GUDANG_CODE"] = df["GUDANG_RAW"].apply(normalize_warehouse_code)
 
-    df = df[df["SKU NO"].notna()].copy()
+    df = df[df["KODE BARANG"].notna()].copy()
     df = df[df["GUDANG_CODE"].notna()].copy()
     df = df[df["QTY"] > 0].copy()
 
     return (
-        df.groupby(["SKU NO", "GUDANG_CODE"], as_index=False)["QTY"]
+        df.groupby(["KODE BARANG", "GUDANG_CODE"], as_index=False)["QTY"]
         .sum()
-        .sort_values(["QTY", "SKU NO"], ascending=[False, True])
+        .sort_values(["QTY", "KODE BARANG"], ascending=[False, True])
         .reset_index(drop=True)
     )
 
 def build_sales_pivot_alerts(sales_pivot: pd.DataFrame, pricelist_wh: pd.DataFrame, warehouse_stock_cols: dict) -> pd.DataFrame:
-    empty_cols = ["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "GUDANG", "QTY SALES", "STOK GUDANG", "STOK DEFAULT"]
+    empty_cols = ["KODE BARANG", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "GUDANG", "QTY SALES", "STOK GUDANG", "STOK DEFAULT"]
     if sales_pivot.empty or pricelist_wh.empty:
         return pd.DataFrame(columns=empty_cols)
 
@@ -486,10 +486,10 @@ def build_sales_pivot_alerts(sales_pivot: pd.DataFrame, pricelist_wh: pd.DataFra
         return pd.DataFrame(columns=empty_cols)
 
     warehouse_cols = list(set(warehouse_stock_cols.values()))
-    needed_cols = ["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "DEFAULT_STOCK_TOTAL"] + warehouse_cols
+    needed_cols = ["KODE BARANG", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "DEFAULT_STOCK_TOTAL"] + warehouse_cols
     pl = pricelist_wh[[c for c in needed_cols if c in pricelist_wh.columns]].copy()
 
-    merged = base.merge(pl, how="left", on="SKU NO")
+    merged = base.merge(pl, how="left", on="KODE BARANG")
 
     def get_wh_stock(row):
         wh_code = row.get("GUDANG_CODE")
@@ -504,8 +504,8 @@ def build_sales_pivot_alerts(sales_pivot: pd.DataFrame, pricelist_wh: pd.DataFra
 
     merged = merged[(merged["WAREHOUSE_STOCK"] <= 0) & (merged["DEFAULT_STOCK_TOTAL"] >= 3)].copy()
 
-    out = merged[["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "GUDANG_CODE", "QTY", "WAREHOUSE_STOCK", "DEFAULT_STOCK_TOTAL"]].copy()
-    out.columns = ["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "GUDANG", "QTY SALES", "STOK GUDANG", "STOK DEFAULT"]
+    out = merged[["KODE BARANG", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "GUDANG_CODE", "QTY", "WAREHOUSE_STOCK", "DEFAULT_STOCK_TOTAL"]].copy()
+    out.columns = ["KODE BARANG", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "GUDANG", "QTY SALES", "STOK GUDANG", "STOK DEFAULT"]
     return out.sort_values(["QTY SALES", "STOK DEFAULT"], ascending=[False, False]).reset_index(drop=True)
 
 def render_sales_pivot_alert_table(df: pd.DataFrame):
