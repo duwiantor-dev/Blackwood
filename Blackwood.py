@@ -526,6 +526,13 @@ def render_main_table_dynamic(df: pd.DataFrame, selected_division_label: str, se
 
     visible_df = display_df[["KODEBARANG", "PRODUCT", "BRAND", "SPESIFIKASI", "M3", "03 OLP", "04 MOD", "05 OLR", "STOK"]].copy()
 
+    # Rapikan angka: M3 tanpa desimal, nilai 0 pada QTY/STOK disembunyikan
+    visible_df["M3"] = pd.to_numeric(visible_df["M3"], errors="coerce").fillna(0).round(0).astype(int)
+
+    for col in ["03 OLP", "04 MOD", "05 OLR", "STOK"]:
+        numeric_col = pd.to_numeric(visible_df[col], errors="coerce").fillna(0).round(0)
+        visible_df[col] = numeric_col.apply(lambda x: "" if float(x) == 0 else int(x))
+
     def highlight_row(row):
         styles = [""] * len(row)
         col_idx = {col: i for i, col in enumerate(visible_df.columns)}
