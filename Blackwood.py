@@ -423,6 +423,122 @@ def render_main_table_simple(df: pd.DataFrame, master_df: pd.DataFrame):
 
     return display_df
 
+
+def build_main_table_filtered(df: pd.DataFrame, period: str, stock_division: str) -> pd.DataFrame:
+    base = df[df["PERIOD"] == period].copy()
+
+    qty = (
+        base.groupby(["KODEBARANG", "SPESIFIKASI_FINAL", "PRICE", "DIVISION"], as_index=False)["QTY"]
+        .sum()
+        .pivot(index=["KODEBARANG", "SPESIFIKASI_FINAL", "PRICE"], columns="DIVISION", values="QTY")
+        .fillna(0)
+        .reset_index()
+    )
+
+    for div in DIVISIONS:
+        if div not in qty.columns:
+            qty[div] = 0
+
+    product_brand = (
+        base[["KODEBARANG", "PRODUCT_FINAL", "BRAND"]]
+        .dropna(subset=["KODEBARANG"])
+        .drop_duplicates(subset=["KODEBARANG"], keep="first")
+        .copy()
+    )
+
+    stock_map = {"DIV03": "STOK_DIV03", "DIV04": "STOK_DIV04", "DIV05": "STOK_DIV05"}
+    stok_col = stock_map.get(stock_division, "STOK_DIV05")
+
+    stock_df = (
+        base[["KODEBARANG", stok_col]]
+        .dropna(subset=["KODEBARANG"])
+        .drop_duplicates(subset=["KODEBARANG"], keep="first")
+        .rename(columns={stok_col: "STOK"})
+        .copy()
+    )
+
+    out = qty.merge(product_brand, how="left", on="KODEBARANG")
+    out = out.merge(stock_df, how="left", on="KODEBARANG")
+    out["STOK"] = to_num(out["STOK"]).fillna(0)
+    out["PRICE"] = to_num(out["PRICE"]).fillna(0)
+
+    out = out.rename(columns={
+        "PRODUCT_FINAL": "PRODUCT",
+        "SPESIFIKASI_FINAL": "SPESIFIKASI",
+        "BRAND": "BRAND",
+        "PRICE": "M3",
+        "DIV03": "03 OLP",
+        "DIV04": "04 MOD",
+        "DIV05": "05 OLR",
+    })
+
+    ordered_cols = ["KODEBARANG", "PRODUCT", "BRAND", "SPESIFIKASI", "M3", "03 OLP", "04 MOD", "05 OLR", "STOK"]
+    for col in ordered_cols:
+        if col not in out.columns:
+            out[col] = 0 if col not in ["KODEBARANG", "PRODUCT", "BRAND", "SPESIFIKASI"] else ""
+
+    out["M3"] = (to_num(out["M3"]).fillna(0) / 1000).round(0)
+    out = out[ordered_cols].sort_values(["KODEBARANG", "SPESIFIKASI"], ascending=[True, True]).reset_index(drop=True)
+    return out
+
+def render_main_table_highlight(df: pd.DataFrame, selected_division_label: str):
+    def is_number(v):
+        return isinstance(v, (int, float, np.integer, np.floating)) and not pd.isna(v)
+
+    def fmt_number(v):
+        return f"{int(round(float(v))):,}".replace(",", ".")
+
+    html = []
+    html.append("""
+    <div style="border:1px solid #d9d9d9;border-radius:8px;background:#fff;padding:8px;">
+      <div style="overflow-x:auto;">
+        <table style="border-collapse:collapse;width:100%;font-size:12px;">
+    """)
+    html.append("<thead><tr>")
+    for col in df.columns:
+        html.append(f'<th style="border:1px solid #2b2b2b;background:#f3f4f6;padding:6px;text-align:left;">{col}</th>')
+    html.append("</tr></thead><tbody>")
+
+    compare_cols = ["03 OLP", "04 MOD", "05 OLR"]
+
+    for _, row in df.iterrows():
+        html.append("<tr>")
+
+        losing_selected = False
+        if selected_division_label in compare_cols:
+            current_val = row[selected_division_label]
+            other_vals = [row[c] for c in compare_cols if c != selected_division_label]
+            if is_number(current_val):
+                numeric_others = [v for v in other_vals if is_number(v)]
+                if numeric_others:
+                    losing_selected = any(float(current_val) < float(v) for v in numeric_others)
+
+        qty_values = [row[c] for c in compare_cols if is_number(row[c])]
+        max_qty = max([float(v) for v in qty_values], default=0)
+        stok_less_than_qty = is_number(row["STOK"]) and float(row["STOK"]) < max_qty
+
+        for col in df.columns:
+            val = row[col]
+            try:
+                if pd.notna(val) and isinstance(val, (int, float, np.integer, np.floating)):
+                    display = fmt_number(val)
+                else:
+                    display = "" if pd.isna(val) else str(val)
+            except Exception:
+                display = str(val)
+
+            style = 'border:1px solid #2b2b2b;padding:6px;text-align:left;'
+            if col == selected_division_label and losing_selected:
+                style += 'color:#c62828;font-weight:700;background:#ffebee;'
+            if col == "STOK" and stok_less_than_qty:
+                style += 'color:#c62828;font-weight:700;background:#ffebee;'
+
+            html.append(f'<td style="{style}">{display}</td>')
+        html.append("</tr>")
+
+    html.append("</tbody></table></div></div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+
 # =========================================================
 # UI
 # =========================================================
@@ -589,10 +705,17 @@ with right:
 
 
 st.markdown("### Tabel Utama Analisa")
-st.caption("Tabel utama sementara pakai opsi sederhana supaya stabil tampil. Kolom PRODUCT dan BRAND tetap ditampilkan.")
 
-main_table = build_main_table(filtered)
-main_table_export = render_main_table_simple(main_table, filtered)
+main_filter_col1, main_filter_col2, main_filter_col3 = st.columns([1, 1, 1])
+with main_filter_col1:
+    main_period = st.selectbox("Filter Period", PERIODS, index=0, key="main_period_filter")
+with main_filter_col2:
+    main_division_label = st.selectbox("Filter Divisi", ["03 OLP", "04 MOD", "05 OLR"], index=2, key="main_division_filter")
+with main_filter_col3:
+    main_stock_division = st.selectbox("Filter Stok Divisi", ["DIV03", "DIV04", "DIV05"], index=2, key="main_stock_division_filter")
+
+main_table_export = build_main_table_filtered(filtered, main_period, main_stock_division)
+render_main_table_highlight(main_table_export, main_division_label)
 
 out = io.BytesIO()
 with pd.ExcelWriter(out, engine="openpyxl") as writer:
