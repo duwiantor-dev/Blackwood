@@ -757,41 +757,65 @@ st.title("Dashboard Analisa Produk")
 st.markdown('<div class="upload-card-wrap">', unsafe_allow_html=True)
 st.markdown("### Upload File")
 
-upload_row1_col1, upload_row1_col2 = st.columns(2)
-with upload_row1_col1:
+upload_col1, upload_col2, upload_col3 = st.columns(3)
+with upload_col1:
     st.markdown("**Upload MPLSSR**")
     mplssr_file = st.file_uploader("", type=["xlsx", "xls"], key="upload_mplssr_main", label_visibility="collapsed")
     st.caption("200MB per file • XLSX, XLS")
 
-with upload_row1_col2:
+with upload_col2:
     st.markdown("**Upload Pricelist**")
     pricelist_file = st.file_uploader("", type=["xlsx", "xls"], key="upload_pricelist_main", label_visibility="collapsed")
     st.caption("200MB per file • XLSX, XLS")
 
-upload_row2_col1, upload_row2_col2 = st.columns(2)
-with upload_row2_col1:
+with upload_col3:
     st.markdown("**Upload SALES PIVOT**")
     sales_pivot_file = st.file_uploader("", type=["xlsx", "xls"], key="upload_sales_pivot_main", label_visibility="collapsed")
     st.caption("200MB per file • XLSX, XLS")
 
-with upload_row2_col2:
-    st.empty()
+all_required_uploaded = all([mplssr_file is not None, pricelist_file is not None, sales_pivot_file is not None])
 
+process_upload = st.button(
+    "PROSES FILE",
+    type="primary",
+    use_container_width=True,
+    disabled=not all_required_uploaded,
+)
+
+if not all_required_uploaded:
+    st.info("Silakan upload MPLSSR, Pricelist, dan SALES PIVOT dulu, lalu klik PROSES FILE.")
+elif not process_upload and "processed_data" not in st.session_state:
+    st.info("Semua file sudah di-upload. Klik PROSES FILE untuk generate dashboard.")
 st.markdown('</div>', unsafe_allow_html=True)
 
-if not mplssr_file or not pricelist_file:
-    st.info("Silakan upload file MPLSSR dan Pricelist.")
+if process_upload:
+    try:
+        sales = load_mplssr(mplssr_file)
+        stock = load_pricelist(pricelist_file)
+        master = build_master(sales, stock)
+        pricelist_wh, warehouse_stock_cols = load_pricelist_with_warehouses(pricelist_file)
+        sales_pivot = load_sales_pivot(sales_pivot_file)
+        st.session_state["processed_data"] = {
+            "sales": sales,
+            "stock": stock,
+            "master": master,
+            "pricelist_wh": pricelist_wh,
+            "warehouse_stock_cols": warehouse_stock_cols,
+            "sales_pivot": sales_pivot,
+        }
+    except Exception as e:
+        st.error(f"Gagal membaca file: {e}")
+        st.stop()
+
+if "processed_data" not in st.session_state:
     st.stop()
 
-try:
-    sales = load_mplssr(mplssr_file)
-    stock = load_pricelist(pricelist_file)
-    master = build_master(sales, stock)
-    pricelist_wh, warehouse_stock_cols = load_pricelist_with_warehouses(pricelist_file)
-    sales_pivot = load_sales_pivot(sales_pivot_file) if sales_pivot_file is not None else pd.DataFrame()
-except Exception as e:
-    st.error(f"Gagal membaca file: {e}")
-    st.stop()
+sales = st.session_state["processed_data"]["sales"]
+stock = st.session_state["processed_data"]["stock"]
+master = st.session_state["processed_data"]["master"]
+pricelist_wh = st.session_state["processed_data"]["pricelist_wh"]
+warehouse_stock_cols = st.session_state["processed_data"]["warehouse_stock_cols"]
+sales_pivot = st.session_state["processed_data"]["sales_pivot"]
 
 product_options = sorted(master["PRODUCT_FINAL"].dropna().unique().tolist())
 default_product = ["LAPTOP R"] if "LAPTOP R" in product_options else []
@@ -841,12 +865,8 @@ with right:
     render_left_table(build_brand_table(filtered, segmentasi_period), f"Segmentasi Brand - {segmentasi_period}", selected_division=selected_division_segment)
 
 st.markdown("### Alert SALES PIVOT")
-if sales_pivot_file is None:
-    sales_pivot_alerts = pd.DataFrame()
-    st.info("Upload SALES PIVOT untuk melihat alert penjualan tinggi di gudang tertentu saat stok gudang kosong tetapi stok default masih ada.")
-else:
-    sales_pivot_alerts = build_sales_pivot_alerts(sales_pivot, pricelist_wh, warehouse_stock_cols)
-    render_sales_pivot_alert_table(sales_pivot_alerts)
+sales_pivot_alerts = build_sales_pivot_alerts(sales_pivot, pricelist_wh, warehouse_stock_cols)
+render_sales_pivot_alert_table(sales_pivot_alerts)
 
 st.markdown("### Tabel Utama Analisa")
 with st.form("main_table_form"):
@@ -892,5 +912,5 @@ with st.expander("Debug hasil parsing"):
     st.write("Sample Pricelist:", stock.head(20))
     st.write("Sample Master:", master.head(20))
     st.write("Sample Main Table:", main_table_export.head(20))
-    st.write("Sample SALES PIVOT:", sales_pivot.head(20) if sales_pivot_file is not None else "Belum upload SALES PIVOT")
-    st.write("Sample SALES PIVOT Alerts:", sales_pivot_alerts.head(20) if sales_pivot_file is not None else "Belum upload SALES PIVOT")
+    st.write("Sample SALES PIVOT:", sales_pivot.head(20))
+    st.write("Sample SALES PIVOT Alerts:", sales_pivot_alerts.head(20))
