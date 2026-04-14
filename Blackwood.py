@@ -426,8 +426,8 @@ def render_main_table_simple(df: pd.DataFrame, master_df: pd.DataFrame):
 # =========================================================
 # UI
 # =========================================================
-st.title("Dashboard Analisa Sales vs Stock")
-st.caption("QTY diambil dari MPLSSR. STOK dan harga diambil dari Pricelist. Kolom 05 OLR di card segmentasi akan merah jika pada baris itu nilainya kalah dari salah satu (03 OLP atau 04 MOD).")
+st.title("Dashboard Analisa Produk")
+
 
 st.sidebar.header("Upload File")
 mplssr_file = st.sidebar.file_uploader("Upload MPLSSR", type=["xlsx", "xls"])
@@ -501,7 +501,7 @@ def build_brand_table(df, period):
     brand.columns = ["BRAND", "03 OLP", "04 MOD", "05 OLR"]
     return brand
 
-def render_left_table(df, title):
+def render_left_table(df, title, selected_division="05 OLR"):
     def is_number(v):
         return isinstance(v, (int, float, np.integer, np.floating)) and not pd.isna(v)
 
@@ -520,22 +520,20 @@ def render_left_table(df, title):
         html.append(f'<th style="border:1px solid #2b2b2b;background:#f3f4f6;padding:6px;text-align:left;">{col}</th>')
     html.append("</tr></thead><tbody>")
 
-    has_compare_cols = all(c in df.columns for c in ["03 OLP", "04 MOD", "05 OLR"])
+    compare_cols = ["03 OLP", "04 MOD", "05 OLR"]
+    has_compare_cols = all(c in df.columns for c in compare_cols)
 
     for _, row in df.iterrows():
         html.append("<tr>")
 
-        row_03 = row["03 OLP"] if has_compare_cols else None
-        row_04 = row["04 MOD"] if has_compare_cols else None
-        row_05 = row["05 OLR"] if has_compare_cols else None
-
-        olr_is_losing = (
-            has_compare_cols
-            and is_number(row_03)
-            and is_number(row_04)
-            and is_number(row_05)
-            and (float(row_05) < float(row_03) or float(row_05) < float(row_04))
-        )
+        losing_selected = False
+        if has_compare_cols and selected_division in compare_cols:
+            current_val = row[selected_division]
+            other_vals = [row[c] for c in compare_cols if c != selected_division]
+            if is_number(current_val):
+                numeric_others = [v for v in other_vals if is_number(v)]
+                if numeric_others:
+                    losing_selected = any(float(current_val) < float(v) for v in numeric_others)
 
         for col in df.columns:
             val = row[col]
@@ -548,7 +546,7 @@ def render_left_table(df, title):
                 display = str(val)
 
             style = 'border:1px solid #2b2b2b;padding:6px;text-align:left;'
-            if col == "05 OLR" and olr_is_losing:
+            if col == selected_division and losing_selected:
                 style += 'color:#c62828;font-weight:700;background:#ffebee;'
 
             html.append(f'<td style="{style}">{display}</td>')
@@ -557,7 +555,7 @@ def render_left_table(df, title):
     html.append("</tbody></table></div></div>")
     st.markdown("".join(html), unsafe_allow_html=True)
 
-seg_filter_col1, seg_filter_col2 = st.columns([1, 3])
+seg_filter_col1, seg_filter_col2, seg_filter_col3 = st.columns([1, 1, 3])
 with seg_filter_col1:
     segmentasi_period = st.selectbox(
         "Filter Segmentasi",
@@ -565,14 +563,29 @@ with seg_filter_col1:
         index=0,
         key="segmentasi_period_top",
     )
+with seg_filter_col2:
+    selected_division_segment = st.selectbox(
+        "Filter Divisi",
+        ["03 OLP", "04 MOD", "05 OLR"],
+        index=2,
+        key="segmentasi_division_top",
+    )
 
 left, right = st.columns(2)
 
 with left:
-    render_left_table(build_segment_table(filtered, segmentasi_period), f"Segmentasi Harga - {segmentasi_period}")
+    render_left_table(
+        build_segment_table(filtered, segmentasi_period),
+        f"Segmentasi Harga - {segmentasi_period}",
+        selected_division=selected_division_segment,
+    )
 
 with right:
-    render_left_table(build_brand_table(filtered, segmentasi_period), f"Segmentasi Brand - {segmentasi_period}")
+    render_left_table(
+        build_brand_table(filtered, segmentasi_period),
+        f"Segmentasi Brand - {segmentasi_period}",
+        selected_division=selected_division_segment,
+    )
 
 
 st.markdown("### Tabel Utama Analisa")
