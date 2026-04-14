@@ -520,6 +520,7 @@ def render_sales_pivot_alert_table(df: pd.DataFrame):
 # =========================================================
 def build_master(sales: pd.DataFrame, stock: pd.DataFrame) -> pd.DataFrame:
     df = sales.merge(stock, how="left", on="MERGE_KEY", suffixes=("_sales", "_stock"))
+    df = df.reset_index(drop=True)
 
     for col in ["PRICE", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05", "CATEGORY", "PRICE_SEGMENT"]:
         if col not in df.columns:
@@ -621,6 +622,7 @@ def build_main_table_filtered(
     selected_brands=None,
 ) -> pd.DataFrame:
     base = df[df["PERIOD"] == period].copy()
+    base = base.reset_index(drop=True)
 
     if selected_segments:
         base = base[base["PRICE"].apply(price_segment).isin(selected_segments)]
@@ -630,6 +632,7 @@ def build_main_table_filtered(
     qty = (
         base.groupby(["KODEBARANG", "SPESIFIKASI_FINAL", "PRICE", "DIVISION"], as_index=False)["QTY"]
         .sum()
+        .loc[:, ~base.columns.duplicated()]
         .pivot(index=["KODEBARANG", "SPESIFIKASI_FINAL", "PRICE"], columns="DIVISION", values="QTY")
         .fillna(0)
         .reset_index()
