@@ -220,6 +220,7 @@ def load_mplssr(file) -> pd.DataFrame:
     df = pd.read_excel(file, sheet_name="ALL", header=1)
     df = df.iloc[4:].copy().reset_index(drop=True)
     df.columns = [str(c).strip() for c in df.columns]
+    df = df.loc[:, ~df.columns.duplicated()]
 
     base_cols = ["PRODUCT", "BRAND", "KODE BARANG", "SPESIFIKASI"]
     for c in base_cols:
@@ -330,6 +331,7 @@ def load_pricelist(file) -> pd.DataFrame:
             "CATEGORY", "PRICE_SEGMENT", "MERGE_KEY"
         ])
     out = pd.concat(frames, ignore_index=True)
+    out = out.loc[:, ~out.columns.duplicated()]
     out = out.drop_duplicates(subset=["MERGE_KEY"], keep="first")
     return out
 
@@ -421,6 +423,7 @@ def load_pricelist_with_warehouses(file):
         return pd.DataFrame(), {}
 
     out = pd.concat(frames, ignore_index=True)
+    out = out.loc[:, ~out.columns.duplicated()]
     out = out.drop_duplicates(subset=["SKU NO", "KODEBARANG"], keep="first").reset_index(drop=True)
     return out, merged_map
 
@@ -778,7 +781,7 @@ all_required_uploaded = all([mplssr_file is not None, pricelist_file is not None
 process_upload = st.button(
     "PROSES FILE",
     type="primary",
-    use_container_width=True,
+    
     disabled=not all_required_uploaded,
 )
 
