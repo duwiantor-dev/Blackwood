@@ -208,24 +208,21 @@ def _norm_header_cell(value) -> str:
     return str(value).strip().upper()
 
 def find_div05_stock_columns(columns: List[str], excel_row3_raw: List, excel_row4_raw: List) -> List[str]:
-    # Excel row 3 dan row 4 bisa berupa merged cell.
-    # Supaya semua kolom di dalam merge range ikut terbaca, keduanya di-forward fill ke kanan.
+    # Header bisa merge cell, jadi harus di-forward fill ke kanan.
     row3_vals = [_norm_header_cell(v) for v in _ffill_header(excel_row3_raw)]
     row4_vals = [_norm_header_cell(v).replace(" ", "") for v in _ffill_header(excel_row4_raw)]
 
-    # Titik awal range area ditandai kata RAM di row 3.
+    # 05 OLR dimulai dari area RAM di row 3 dan dihitung sampai kolom paling kanan.
     ram_start = next((i for i, v in enumerate(row3_vals) if "RAM" in v), None)
+
+    # Fallback: kalau RAM tidak ditemukan, mulai dari kolom pertama 5B di row 4.
+    if ram_start is None:
+        ram_start = next((i for i, v in enumerate(row4_vals) if v == "5B"), None)
+
     if ram_start is None:
         return []
 
-    # Dari kolom RAM sampai kolom paling kanan file.
-    idx_ram_to_right = set(range(ram_start, len(columns)))
-
-    # Ambil semua kolom yang pada row 4 bernilai 5B
-    idx_5b = {i for i, v in enumerate(row4_vals) if v == "5B"}
-
-    final_idx = sorted(idx_ram_to_right & idx_5b)
-    return [columns[i] for i in final_idx if 0 <= i < len(columns)]
+    return [columns[i] for i in range(ram_start, len(columns)) if 0 <= i < len(columns)]
 
 def area_code_matches(value, prefixes: List[str]) -> bool:
     if pd.isna(value):
