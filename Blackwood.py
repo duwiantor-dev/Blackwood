@@ -396,6 +396,7 @@ def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
 
     warehouse_stock_cols = {}
     default_stock_cols = []
+    jkt_stock_cols = []
 
     for i, col in enumerate(columns):
         group, wh = warehouse_meta[i]
@@ -406,10 +407,12 @@ def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
 
         if group_clean == "DEFAULT":
             default_stock_cols.append(col)
+        if group_clean == "JKT":
+            jkt_stock_cols.append(col)
         if wh_clean:
             warehouse_stock_cols[wh_clean] = col
 
-    keep_cols = ["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "PRICE"] + list(set(default_stock_cols + list(warehouse_stock_cols.values())))
+    keep_cols = ["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "PRICE"] + list(set(default_stock_cols + jkt_stock_cols + list(warehouse_stock_cols.values())))
     out = df[keep_cols].copy()
     out = out.loc[:, ~out.columns.duplicated()].copy()
     out["DEFAULT_STOCK_TOTAL"] = df.loc[:, ~df.columns.duplicated()][default_stock_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1) if default_stock_cols else 0
@@ -441,125 +444,97 @@ def load_sales_pivot(file) -> pd.DataFrame:
     raw.columns = [str(c).strip().upper() for c in raw.columns]
     raw = raw.loc[:, ~pd.Index(raw.columns).duplicated()].copy()
 
+    kode_gudang_col = next((c for c in raw.columns if "KODE GUDANG" in c or "KODEGUDANG" in c), None)
     kode_barang_col = next((c for c in raw.columns if "KODE BARANG" in c or "KODEBARANG" in c), None)
     qty_col = next((c for c in raw.columns if "QTY" in c or "PCS" in c or "TERJUAL" in c), None)
 
-    if kode_barang_col is None or qty_col is None:
+    if kode_gudang_col is None or kode_barang_col is None or qty_col is None:
         raise ValueError(
             f"Format SALES PIVOT tidak cocok. Kolom terbaca: {list(raw.columns)}. "
-            "Pastikan header row 2 berisi KODE BARANG dan QTY."
+            "Pastikan header row 2 berisi KODE GUDANG, KODE BARANG, dan QTY."
         )
 
-    div_col = next((c for c in raw.columns if "DIV" in c), None)
-    area_col = next((c for c in raw.columns if "AREA" in c), None)
-    gudang_col = next((c for c in raw.columns if "GUDANG" in c), None)
+    df = raw[[kode_gudang_col, kode_barang_col, qty_col]].copy()
+    df.columns = ["KODE GUDANG", "KODE BARANG", "QTY"]
+    df["KODE GUDANG"] = normalize_text(df["KODE GUDANG"])
+    df["KODE BARANG"] = normalize_text(df["KODE BARANG"])
+    df["QTY"] = to_num(df["QTY"]).fillna(0)
 
-    df = raw.copy()
-    df["KODE BARANG"] = normalize_text(df[kode_barang_col])
-    df["QTY"] = to_num(df[qty_col]).fillna(0)
-
-    if div_col is not None:
-        df["DIVISION"] = normalize_text(df[div_col])
-    elif area_col is not None:
-        df["DIVISION"] = normalize_text(df[area_col]).replace({
-            "03 OLP": "DIV03",
-            "04 MOD": "DIV04",
-            "05 OLR": "DIV05",
-            "OLP": "DIV03",
-            "MOD": "DIV04",
-            "OLR": "DIV05",
-            "3": "DIV03",
-            "4": "DIV04",
-            "5": "DIV05",
-            "03": "DIV03",
-            "04": "DIV04",
-            "05": "DIV05",
-        })
-    elif gudang_col is not None:
-        gudang_txt = normalize_text(df[gudang_col]).fillna("")
-        df["DIVISION"] = np.where(
-            gudang_txt.str.contains("05|OLR", na=False), "DIV05",
-            np.where(
-                gudang_txt.str.contains("04|MOD", na=False), "DIV04",
-                np.where(gudang_txt.str.contains("03|OLP", na=False), "DIV03", np.nan)
-            )
-        )
-    else:
-        df["DIVISION"] = "DIV05"
-
+    df = df[df["KODE GUDANG"].notna()].copy()
     df = df[df["KODE BARANG"].notna()].copy()
-    df = df[df["DIVISION"].notna()].copy()
     df = df[df["QTY"] > 0].copy()
 
     return (
-        df.groupby(["KODE BARANG", "DIVISION"], as_index=False)["QTY"]
+        df.groupby(["KODE GUDANG", "KODE BARANG"], as_index=False)["QTY"]
         .sum()
+        .sort_values(["QTY", "KODE GUDANG", "KODE BARANG"], ascending=[False, True, True])
         .reset_index(drop=True)
     )
 
 def build_sales_pivot_alerts(sales_pivot: pd.DataFrame, pricelist_wh: pd.DataFrame, warehouse_stock_cols: dict) -> pd.DataFrame:
-    empty_cols = [
-        "KODE BARANG", "PRODUCT", "SPESIFIKASI",
-        "QTY 05 OLR", "STOK 05 OLR", "STOK 03 OLP", "STOK 04 MOD", "KETERANGAN"
-    ]
+    empty_cols = ["KODE GUDANG", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY"]
     if sales_pivot.empty or pricelist_wh.empty:
         return pd.DataFrame(columns=empty_cols)
 
-    base = sales_pivot[sales_pivot["DIVISION"] == "DIV05"].copy()
+    base = sales_pivot.copy()
     if base.empty:
         return pd.DataFrame(columns=empty_cols)
 
-    sales_05 = (
-        base.groupby("KODE BARANG", as_index=False)["QTY"]
-        .sum()
-        .rename(columns={"QTY": "QTY 05 OLR"})
-    )
+    pl_needed = ["KODEBARANG", "SPESIFIKASI"] + list(set(warehouse_stock_cols.values()))
+    pl = pricelist_wh[[c for c in pl_needed if c in pricelist_wh.columns]].copy()
 
-    needed_cols = ["KODEBARANG", "PRODUCT", "SPESIFIKASI", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05"]
-    pl = pricelist_wh[[c for c in needed_cols if c in pricelist_wh.columns]].copy()
+    merged = base.merge(pl, how="left", left_on="KODE BARANG", right_on="KODEBARANG")
 
-    merged = sales_05.merge(pl, how="left", left_on="KODE BARANG", right_on="KODEBARANG")
+    ready_codes = ["1A", "3A", "3B", "3C", "4A", "4B", "5B"]
+    ready_cols = {code: warehouse_stock_cols.get(code) for code in ready_codes if warehouse_stock_cols.get(code) in merged.columns}
 
-    if "STOK_DIV03" not in merged.columns:
-        merged["STOK_DIV03"] = 0
-    if "STOK_DIV04" not in merged.columns:
-        merged["STOK_DIV04"] = 0
-    if "STOK_DIV05" not in merged.columns:
-        merged["STOK_DIV05"] = 0
+    def get_current_stock(row):
+        gudang_code = normalize_warehouse_code(row.get("KODE GUDANG"))
+        stock_col = warehouse_stock_cols.get(gudang_code)
+        if stock_col and stock_col in row.index:
+            val = pd.to_numeric(row[stock_col], errors="coerce")
+            return 0 if pd.isna(val) else float(val)
+        return 0.0
 
-    merged["STOK_DIV03"] = to_num(merged["STOK_DIV03"]).fillna(0)
-    merged["STOK_DIV04"] = to_num(merged["STOK_DIV04"]).fillna(0)
-    merged["STOK_DIV05"] = to_num(merged["STOK_DIV05"]).fillna(0)
+    def get_ready_warehouses(row):
+        current_code = normalize_warehouse_code(row.get("KODE GUDANG"))
+        ready_list = []
+        for code in ready_codes:
+            if code == current_code:
+                continue
+            stock_col = ready_cols.get(code)
+            if not stock_col:
+                continue
+            val = pd.to_numeric(row.get(stock_col), errors="coerce")
+            val = 0 if pd.isna(val) else float(val)
+            if val > 0:
+                ready_list.append(code)
+        return ", ".join(ready_list)
 
-    refill_mask = (
-        (merged["QTY 05 OLR"] > 0) &
-        (merged["STOK_DIV05"] <= 0) &
-        ((merged["STOK_DIV03"] > 0) | (merged["STOK_DIV04"] > 0))
-    )
+    merged["STOK"] = merged.apply(get_current_stock, axis=1)
+    merged["GUDANG READY"] = merged.apply(get_ready_warehouses, axis=1)
+    merged["KET"] = np.where((merged["QTY"] > 0) & (merged["STOK"] <= 0) & (merged["GUDANG READY"] != ""), "REFILL", "")
 
-    merged = merged[refill_mask].copy()
+    merged = merged[merged["KET"] == "REFILL"].copy()
     if merged.empty:
         return pd.DataFrame(columns=empty_cols)
 
-    merged["KETERANGAN"] = "Refill"
+    merged["KEBUTUHAN_STOK"] = to_num(merged["QTY"]).fillna(0) - to_num(merged["STOK"]).fillna(0)
 
-    out = merged[[
-        "KODE BARANG", "PRODUCT", "SPESIFIKASI",
-        "QTY 05 OLR", "STOK_DIV05", "STOK_DIV03", "STOK_DIV04", "KETERANGAN"
-    ]].copy()
-    out.columns = [
-        "KODE BARANG", "PRODUCT", "SPESIFIKASI",
-        "QTY 05 OLR", "STOK 05 OLR", "STOK 03 OLP", "STOK 04 MOD", "KETERANGAN"
-    ]
-    return out.sort_values(["QTY 05 OLR", "STOK 03 OLP", "STOK 04 MOD"], ascending=[False, False, False]).reset_index(drop=True)
+    out = merged[["KODE GUDANG", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY", "KEBUTUHAN_STOK"]].copy()
+    out["QTY"] = pd.to_numeric(out["QTY"], errors="coerce").fillna(0).round(0).astype(int)
+    out["STOK"] = pd.to_numeric(out["STOK"], errors="coerce").fillna(0).round(0).astype(int)
+
+    out = out.sort_values(["KEBUTUHAN_STOK", "QTY", "KODE GUDANG", "KODE BARANG"], ascending=[False, False, True, True]).reset_index(drop=True)
+    return out[["KODE GUDANG", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY"]]
 
 def render_sales_pivot_alert_table(df: pd.DataFrame):
     if df.empty:
-        st.info("Belum ada Analisa Stok dengan kondisi Refill: penjualan ada di 05 OLR, stok 05 OLR kosong, dan stok di divisi lain masih ada.")
+        st.info("Belum ada Analisa Stok dengan kondisi REFILL: ada penjualan, stok gudang kosong, dan ada stok di gudang pusat lain.")
         return
 
     show_df = df.copy()
-    for col in ["QTY 05 OLR", "STOK 05 OLR", "STOK 03 OLP", "STOK 04 MOD"]:
+    for col in ["QTY", "STOK"]:
         show_df[col] = pd.to_numeric(show_df[col], errors="coerce").fillna(0).round(0).astype(int)
 
     html = []
@@ -572,8 +547,8 @@ def render_sales_pivot_alert_table(df: pd.DataFrame):
         html.append("<tr>")
         for col in show_df.columns:
             cls = ""
-            if col in ["STOK 05 OLR", "KETERANGAN"]:
-                cls = ' class="status-refill"'
+            if col in ["STOK", "KET"]:
+                cls = ' class="bg-red"'
             html.append(f"<td{cls}>{row[col]}</td>")
         html.append("</tr>")
     html.append("</tbody></table></div>")
@@ -931,7 +906,7 @@ with left:
 with right:
     render_left_table(build_brand_table(filtered, segmentasi_period), f"Segmentasi Brand - {segmentasi_period}", selected_division=selected_division_segment)
 
-sales_pivot_alerts = build_sales_pivot_alerts(sales_pivot, stock, warehouse_stock_cols)
+sales_pivot_alerts = build_sales_pivot_alerts(sales_pivot, pricelist_wh, warehouse_stock_cols)
 
 st.markdown("### Tabel Utama Analisa")
 with st.form("main_table_form"):
