@@ -486,7 +486,7 @@ def build_segment_table(df, period):
             seg[div] = 0
     seg = seg[["SEGMENT", "DIV03", "DIV04", "DIV05"]].copy()
     seg = seg.sort_values("SEGMENT", key=lambda s: s.map(segment_sort_key)).reset_index(drop=True)
-    seg.columns = ["SEGMENT", "DIV 03", "DIV 04", "DIV 05"]
+    seg.columns = ["SEGMENT", "03 OLP", "04 MOD", "05 OLR"]
     return seg
 
 def build_brand_table(df, period):
@@ -498,7 +498,7 @@ def build_brand_table(df, period):
     brand = brand[["BRAND", "DIV03", "DIV04", "DIV05"]].copy()
     brand["TOTAL"] = brand[["DIV03", "DIV04", "DIV05"]].sum(axis=1)
     brand = brand.sort_values(["TOTAL", "BRAND"], ascending=[False, True]).head(10).drop(columns=["TOTAL"])
-    brand.columns = ["BRAND", "DIV 03", "DIV 04", "DIV 05"]
+    brand.columns = ["BRAND", "03 OLP", "04 MOD", "05 OLR"]
     return brand
 
 def render_left_table(df, title):
