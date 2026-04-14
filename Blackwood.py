@@ -444,14 +444,14 @@ def load_sales_pivot(file) -> pd.DataFrame:
     raw.columns = [str(c).strip().upper() for c in raw.columns]
     raw = raw.loc[:, ~pd.Index(raw.columns).duplicated()].copy()
 
-    kode_gudang_col = next((c for c in raw.columns if "KODE GUDANG" in c or "KODEGUDANG" in c), None)
+    kode_gudang_col = next((c for c in raw.columns if "KODE GUDANG" in c or "KODEGUDANG" in c or c == "GUDANG"), None)
     kode_barang_col = next((c for c in raw.columns if "KODE BARANG" in c or "KODEBARANG" in c), None)
     qty_col = next((c for c in raw.columns if "QTY" in c or "PCS" in c or "TERJUAL" in c), None)
 
     if kode_gudang_col is None or kode_barang_col is None or qty_col is None:
         raise ValueError(
             f"Format SALES PIVOT tidak cocok. Kolom terbaca: {list(raw.columns)}. "
-            "Pastikan header row 2 berisi KODE GUDANG, KODE BARANG, dan QTY."
+            "Pastikan header row 2 berisi GUDANG/KODE GUDANG, KODE BARANG, dan QTY."
         )
 
     df = raw[[kode_gudang_col, kode_barang_col, qty_col]].copy()
