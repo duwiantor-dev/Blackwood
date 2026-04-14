@@ -432,18 +432,34 @@ def load_pricelist_with_warehouses(file):
 # SALES PIVOT
 # =========================================================
 def load_sales_pivot(file) -> pd.DataFrame:
-    raw = pd.read_excel(file, header=1)
-    raw = raw.iloc[2:].copy().reset_index(drop=True)
-    raw.columns = [str(c).strip().upper() for c in raw.columns]
+    raw = pd.read_excel(file, header=None).copy()
 
-    gudang_col = next((c for c in raw.columns if "GUDANG" in c), None)
-    sku_col = next((c for c in raw.columns if "SKU" in c), None)
-    qty_col = next((c for c in raw.columns if "QTY" in c or "PCS" in c or "TERJUAL" in c), None)
+    header_idx = None
+    for idx in range(min(len(raw), 15)):
+        row_vals = [str(v).strip().upper() for v in raw.iloc[idx].tolist() if pd.notna(v) and str(v).strip() != ""]
+        has_gudang = any("GUDANG" in v for v in row_vals)
+        has_sku = any("SKU" in v for v in row_vals)
+        has_qty = any(("QTY" in v) or ("PCS" in v) or ("TERJUAL" in v) for v in row_vals)
+        if has_gudang and has_sku and has_qty:
+            header_idx = idx
+            break
+
+    if header_idx is None:
+        raise ValueError("Format SALES PIVOT tidak cocok. Pastikan ada kolom GUDANG, SKU NO, dan QTY.")
+
+    header = [str(c).strip().upper() for c in raw.iloc[header_idx].tolist()]
+    df = raw.iloc[header_idx + 1:].copy().reset_index(drop=True)
+    df.columns = header
+    df = df.loc[:, ~pd.Index(df.columns).duplicated()].copy()
+
+    gudang_col = next((c for c in df.columns if "GUDANG" in c), None)
+    sku_col = next((c for c in df.columns if "SKU" in c), None)
+    qty_col = next((c for c in df.columns if "QTY" in c or "PCS" in c or "TERJUAL" in c), None)
 
     if gudang_col is None or sku_col is None or qty_col is None:
         raise ValueError("Format SALES PIVOT tidak cocok. Pastikan ada kolom GUDANG, SKU NO, dan QTY.")
 
-    df = raw[[gudang_col, sku_col, qty_col]].copy()
+    df = df[[gudang_col, sku_col, qty_col]].copy()
     df.columns = ["GUDANG_RAW", "SKU NO", "QTY"]
     df["SKU NO"] = normalize_text(df["SKU NO"])
     df["QTY"] = to_num(df["QTY"]).fillna(0)
@@ -494,7 +510,7 @@ def build_sales_pivot_alerts(sales_pivot: pd.DataFrame, pricelist_wh: pd.DataFra
 
 def render_sales_pivot_alert_table(df: pd.DataFrame):
     if df.empty:
-        st.info("Belum ada alert SALES PIVOT dengan rule qty sales >= 3, stok gudang kosong, dan stok default minimal 3.")
+        st.info("Belum ada Analisa Stok dengan rule qty sales >= 3, stok gudang kosong, dan stok default minimal 3.")
         return
 
     show_df = df.copy()
@@ -868,9 +884,7 @@ with left:
 with right:
     render_left_table(build_brand_table(filtered, segmentasi_period), f"Segmentasi Brand - {segmentasi_period}", selected_division=selected_division_segment)
 
-st.markdown("### Alert SALES PIVOT")
 sales_pivot_alerts = build_sales_pivot_alerts(sales_pivot, pricelist_wh, warehouse_stock_cols)
-render_sales_pivot_alert_table(sales_pivot_alerts)
 
 st.markdown("### Tabel Utama Analisa")
 with st.form("main_table_form"):
@@ -898,11 +912,14 @@ main_table_export = build_main_table_filtered(
 )
 main_table_export = render_main_table_dynamic(main_table_export, main_division_label, main_stock_division)
 
+st.markdown("### Analisa Stok")
+render_sales_pivot_alert_table(sales_pivot_alerts)
+
 out = io.BytesIO()
 with pd.ExcelWriter(out, engine="openpyxl") as writer:
     main_table_export.to_excel(writer, index=False, sheet_name="main_table")
     if not sales_pivot_alerts.empty:
-        sales_pivot_alerts.to_excel(writer, index=False, sheet_name="sales_pivot_alert")
+        sales_pivot_alerts.to_excel(writer, index=False, sheet_name="analisa_stok")
 
 st.download_button(
     "Download hasil analisa",
