@@ -828,7 +828,7 @@ def build_main_table_filtered(
             out[col] = 0 if col not in ["KODEBARANG", "PRODUCT", "BRAND", "SPESIFIKASI"] else ""
 
     out["M3"] = (to_num(out["M3"]).fillna(0) / 1000).round(0)
-    compare_map = {"03 OLP": "03 OLP", "04 MOD": "04 MOD", "05 OLR": "05 OLR"}
+    compare_map = {"03 OLP": "03 OLP", "04 MOD": "04 MOD"}
     compare_col = compare_map.get(comparison_division_label, "04 MOD")
     out["SELISIH_KALAH"] = to_num(out[compare_col]).fillna(0) - to_num(out["05 OLR"]).fillna(0)
     return out[ordered_cols + ["SELISIH_KALAH"]].sort_values(["SELISIH_KALAH", compare_col, "05 OLR"], ascending=[False, False, True]).reset_index(drop=True)
@@ -983,7 +983,7 @@ with st.form("unified_filter_form"):
     with fcol4:
         selected_segments = st.multiselect("Range Harga", [s[2] for s in PRICE_SEGMENTS] + ["UNKNOWN"])
     with fcol5:
-        comparison_division = st.selectbox("Perbandingan", ["03 OLP", "04 MOD", "05 OLR"], index=1)
+        comparison_division = st.selectbox("Perbandingan (Versus)", ["03 OLP", "04 MOD"], index=1)
     with fcol6:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
         apply_filter = st.form_submit_button("PROSES", use_container_width=True)
