@@ -509,53 +509,120 @@ def render_main_table_dynamic(df: pd.DataFrame, selected_division_label: str, se
     def losing_division(row):
         current_val = row.get(selected_division_label, 0)
         other_vals = [row.get(c, 0) for c in compare_cols if c != selected_division_label]
-        return any(float(current_val) < float(v) for v in other_vals)
+        try:
+            return any(float(current_val) < float(v) for v in other_vals)
+        except Exception:
+            return False
 
     def stok_problem(row):
-        stok_selected = float(row.get("STOK", 0))
-        qty_selected = float(row.get(selected_division_label, 0))
-        other_stock_cols = [stock_hidden_map[c] for c in compare_cols if c != selected_stock_division_label]
-        other_stock_values = [float(row.get(c, 0)) for c in other_stock_cols]
-
-        cond_a = stok_selected < qty_selected
-        cond_b = stok_selected == 0 and qty_selected > 0 and any(v > 0 for v in other_stock_values)
-        return cond_a or cond_b
+        try:
+            stok_selected = float(row.get("STOK", 0))
+            qty_selected = float(row.get(selected_division_label, 0))
+            other_stock_cols = [stock_hidden_map[c] for c in compare_cols if c != selected_stock_division_label]
+            other_stock_values = [float(row.get(c, 0)) for c in other_stock_cols]
+            cond_a = stok_selected < qty_selected
+            cond_b = stok_selected == 0 and qty_selected > 0 and any(v > 0 for v in other_stock_values)
+            return cond_a or cond_b
+        except Exception:
+            return False
 
     display_df["_LOSS_DIVISION_FLAG"] = display_df.apply(losing_division, axis=1)
     display_df["_STOK_ALERT_FLAG"] = display_df.apply(stok_problem, axis=1)
 
     visible_df = display_df[["KODEBARANG", "PRODUCT", "BRAND", "SPESIFIKASI", "M3", "03 OLP", "04 MOD", "05 OLR", "STOK"]].copy()
 
-    # Rapikan angka: M3 tanpa desimal, nilai 0 pada QTY/STOK disembunyikan
     visible_df["M3"] = pd.to_numeric(visible_df["M3"], errors="coerce").fillna(0).round(0).astype(int)
-
     for col in ["03 OLP", "04 MOD", "05 OLR", "STOK"]:
         numeric_col = pd.to_numeric(visible_df[col], errors="coerce").fillna(0).round(0)
         visible_df[col] = numeric_col.astype(int)
 
-    def highlight_row(row):
-        styles = [""] * len(row)
-        col_idx = {col: i for i, col in enumerate(visible_df.columns)}
+    def fmt_value(val, col_name):
+        if col_name in ["M3", "03 OLP", "04 MOD", "05 OLR", "STOK"]:
+            try:
+                return f"{int(val)}"
+            except Exception:
+                return "0"
+        return "" if pd.isna(val) else str(val)
 
-        original = display_df.loc[row.name]
-        if bool(original["_LOSS_DIVISION_FLAG"]) and selected_division_label in col_idx:
-            styles[col_idx[selected_division_label]] = "background-color: #ffebee; color: #c62828; font-weight: 700;"
-        if bool(original["_STOK_ALERT_FLAG"]) and "STOK" in col_idx:
-            styles[col_idx["STOK"]] = "background-color: #ffebee; color: #c62828; font-weight: 700;"
-        return styles
+    html = []
+    html.append("""
+    <style>
+    .main-fixed-wrap {
+        border: 1px solid #d9d9d9;
+        border-radius: 8px;
+        background: #fff;
+        overflow: auto;
+        max-height: 520px;
+    }
+    table.main-fixed {
+        border-collapse: collapse;
+        width: max-content;
+        min-width: 100%;
+        table-layout: fixed;
+        font-size: 12px;
+    }
+    table.main-fixed th, table.main-fixed td {
+        border: 1px solid #e5e7eb;
+        padding: 6px 8px;
+        text-align: left;
+        white-space: nowrap;
+    }
+    table.main-fixed thead th {
+        position: sticky;
+        top: 0;
+        background: #f8fafc;
+        z-index: 2;
+    }
+    table.main-fixed th:nth-child(1),
+    table.main-fixed td:nth-child(1) { min-width: 180px; }
+    table.main-fixed th:nth-child(2),
+    table.main-fixed td:nth-child(2) { min-width: 90px; }
+    table.main-fixed th:nth-child(3),
+    table.main-fixed td:nth-child(3) { min-width: 80px; }
+    table.main-fixed th:nth-child(4),
+    table.main-fixed td:nth-child(4) {
+        min-width: 420px;
+        max-width: 420px;
+        white-space: normal;
+        word-break: break-word;
+        line-height: 1.25;
+    }
+    table.main-fixed th:nth-child(5),
+    table.main-fixed td:nth-child(5) { min-width: 70px; }
+    table.main-fixed th:nth-child(6),
+    table.main-fixed td:nth-child(6),
+    table.main-fixed th:nth-child(7),
+    table.main-fixed td:nth-child(7),
+    table.main-fixed th:nth-child(8),
+    table.main-fixed td:nth-child(8),
+    table.main-fixed th:nth-child(9),
+    table.main-fixed td:nth-child(9) { min-width: 70px; }
+    .bg-red {
+        background: #ffebee;
+        color: #c62828;
+        font-weight: 700;
+    }
+    </style>
+    """)
+    html.append('<div class="main-fixed-wrap"><table class="main-fixed"><thead><tr>')
+    for col in visible_df.columns:
+        html.append(f"<th>{col}</th>")
+    html.append("</tr></thead><tbody>")
 
-    styled = visible_df.style.apply(highlight_row, axis=1)
+    for idx, row in visible_df.iterrows():
+        html.append("<tr>")
+        original = display_df.loc[idx]
+        for col in visible_df.columns:
+            cls = ""
+            if col == selected_division_label and bool(original["_LOSS_DIVISION_FLAG"]):
+                cls = ' class="bg-red"'
+            if col == "STOK" and bool(original["_STOK_ALERT_FLAG"]):
+                cls = ' class="bg-red"'
+            html.append(f"<td{cls}>{fmt_value(row[col], col)}</td>")
+        html.append("</tr>")
 
-    
-    # Force left alignment for all columns
-    styled = styled.set_properties(**{"text-align": "left"})
-
-    st.dataframe(
-        styled,
-        use_container_width=True,
-        height=520,
-    )
-
+    html.append("</tbody></table></div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
 
     return visible_df
 
