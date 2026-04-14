@@ -427,7 +427,7 @@ def render_main_table_simple(df: pd.DataFrame, master_df: pd.DataFrame):
 # UI
 # =========================================================
 st.title("Dashboard Analisa Sales vs Stock")
-st.caption("QTY diambil dari MPLSSR. STOK dan harga diambil dari Pricelist.")
+st.caption("QTY diambil dari MPLSSR. STOK dan harga diambil dari Pricelist. Kolom 05 OLR di card segmentasi akan merah jika pada baris itu nilainya kalah dari salah satu (03 OLP atau 04 MOD).")
 
 st.sidebar.header("Upload File")
 mplssr_file = st.sidebar.file_uploader("Upload MPLSSR", type=["xlsx", "xls"])
@@ -502,6 +502,12 @@ def build_brand_table(df, period):
     return brand
 
 def render_left_table(df, title):
+    def is_number(v):
+        return isinstance(v, (int, float, np.integer, np.floating)) and not pd.isna(v)
+
+    def fmt_number(v):
+        return f"{int(round(float(v))):,}".replace(",", ".")
+
     html = []
     html.append("""
     <div style="border:1px solid #d9d9d9;border-radius:8px;background:#fff;padding:8px;">
@@ -513,21 +519,41 @@ def render_left_table(df, title):
     for col in df.columns:
         html.append(f'<th style="border:1px solid #2b2b2b;background:#f3f4f6;padding:6px;text-align:left;">{col}</th>')
     html.append("</tr></thead><tbody>")
+
+    has_compare_cols = all(c in df.columns for c in ["03 OLP", "04 MOD", "05 OLR"])
+
     for _, row in df.iterrows():
         html.append("<tr>")
+
+        row_03 = row["03 OLP"] if has_compare_cols else None
+        row_04 = row["04 MOD"] if has_compare_cols else None
+        row_05 = row["05 OLR"] if has_compare_cols else None
+
+        olr_is_losing = (
+            has_compare_cols
+            and is_number(row_03)
+            and is_number(row_04)
+            and is_number(row_05)
+            and (float(row_05) < float(row_03) or float(row_05) < float(row_04))
+        )
+
         for col in df.columns:
             val = row[col]
             try:
-                if isinstance(val, str) and "<span" in val.lower():
-                    display = val
-                elif pd.notna(val) and isinstance(val, (int, float, np.integer, np.floating)):
-                    display = f"{int(round(float(val))):,}".replace(",", ".")
+                if pd.notna(val) and isinstance(val, (int, float, np.integer, np.floating)):
+                    display = fmt_number(val)
                 else:
                     display = "" if pd.isna(val) else str(val)
             except Exception:
                 display = str(val)
-            html.append(f'<td style="border:1px solid #2b2b2b;padding:6px;text-align:left;">{display}</td>')
+
+            style = 'border:1px solid #2b2b2b;padding:6px;text-align:left;'
+            if col == "05 OLR" and olr_is_losing:
+                style += 'color:#c62828;font-weight:700;background:#ffebee;'
+
+            html.append(f'<td style="{style}">{display}</td>')
         html.append("</tr>")
+
     html.append("</tbody></table></div></div>")
     st.markdown("".join(html), unsafe_allow_html=True)
 
