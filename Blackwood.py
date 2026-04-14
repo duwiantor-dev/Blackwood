@@ -207,22 +207,24 @@ def _norm_header_cell(value) -> str:
         return ""
     return str(value).strip().upper()
 
-def find_div05_stock_columns(columns: List[str], excel_row3_filled: List, excel_row4_raw: List) -> List[str]:
-    row3_vals = [_norm_header_cell(v) for v in excel_row3_filled]
-    row4_vals = [_norm_header_cell(v) for v in excel_row4_raw]
+def find_div05_stock_columns(columns: List[str], excel_row3_raw: List, excel_row4_raw: List) -> List[str]:
+    # Excel row 3 dan row 4 bisa berupa merged cell.
+    # Supaya semua kolom di dalam merge range ikut terbaca, keduanya di-forward fill ke kanan.
+    row3_vals = [_norm_header_cell(v) for v in _ffill_header(excel_row3_raw)]
+    row4_vals = [_norm_header_cell(v).replace(" ", "") for v in _ffill_header(excel_row4_raw)]
 
-    idx_5b = {i for i, v in enumerate(row4_vals) if v == "5B"}
-
+    # Titik awal range area ditandai kata RAM di row 3.
     ram_start = next((i for i, v in enumerate(row3_vals) if "RAM" in v), None)
     if ram_start is None:
         return []
 
-    last_used_idx = max((i for i, v in enumerate(row3_vals) if v != ""), default=None)
-    if last_used_idx is None or ram_start > last_used_idx:
-        return []
+    # Dari kolom RAM sampai kolom paling kanan file.
+    idx_ram_to_right = set(range(ram_start, len(columns)))
 
-    idx_ram_to_right = set(range(ram_start, last_used_idx + 1))
-    final_idx = sorted(idx_5b & idx_ram_to_right)
+    # Ambil semua kolom yang pada row 4 bernilai 5B
+    idx_5b = {i for i, v in enumerate(row4_vals) if v == "5B"}
+
+    final_idx = sorted(idx_ram_to_right & idx_5b)
     return [columns[i] for i in final_idx if 0 <= i < len(columns)]
 
 def area_code_matches(value, prefixes: List[str]) -> bool:
@@ -337,8 +339,10 @@ def parse_pricelist_sheet(xls: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
             raw = raw.drop(index=range(coming_idx, end_coming_idx + 1)).reset_index(drop=True)
 
     row1 = raw.iloc[1].tolist()
-    row2 = _ffill_header(raw.iloc[2].tolist())
-    row3 = [str(x).strip().upper() if pd.notna(x) and str(x).strip() != "" else None for x in raw.iloc[3].tolist()]
+    row2_raw = raw.iloc[2].tolist()
+    row2 = _ffill_header(row2_raw)
+    row3_raw = raw.iloc[3].tolist()
+    row3 = [str(x).strip().upper() if pd.notna(x) and str(x).strip() != "" else None for x in row3_raw]
 
     columns = []
     for i, v in enumerate(row1):
@@ -369,7 +373,7 @@ def parse_pricelist_sheet(xls: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
 
     stock03_cols = [columns[i] for i, area in enumerate(row3) if area_code_matches(area, ["3", "03"])]
     stock04_cols = [columns[i] for i, area in enumerate(row3) if area_code_matches(area, ["4", "04"])]
-    stock05_cols = find_div05_stock_columns(columns, row2, row3)
+    stock05_cols = find_div05_stock_columns(columns, row2_raw, row3_raw)
 
     df["PRICE"] = to_num(df["M3"]) * 1000
     df["STOK_DIV03"] = df[stock03_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1) if stock03_cols else 0
