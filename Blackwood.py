@@ -630,9 +630,10 @@ def render_main_table_dynamic(df: pd.DataFrame, selected_division_label: str, se
 # =========================================================
 # UI
 # =========================================================
+st.title("Dashboard Analisa Produk")
 
 
-# sidebar removed
+st.sidebar.header("Upload File")
 mplssr_file = st.sidebar.file_uploader("Upload MPLSSR", type=["xlsx", "xls"])
 pricelist_file = st.sidebar.file_uploader("Upload Pricelist", type=["xlsx", "xls"])
 
@@ -652,14 +653,19 @@ except Exception as e:
 product_options = sorted(master["PRODUCT_FINAL"].dropna().unique().tolist())
 default_product = ["LAPTOP R"] if "LAPTOP R" in product_options else []
 
-filter_left, filter_right = st.columns([2,1])
 
-with filter_right:
-    st.markdown("### Filter Produk")
-    with st.form("filter_form"):
+st.markdown('<div class="upload-card-wrap">', unsafe_allow_html=True)
+st.markdown("### Filter Produk")
+with st.form("filter_form"):
+    filter_col1, filter_col2, filter_col3 = st.columns([1.2, 1.2, 0.5])
+    with filter_col1:
         selected_products = st.multiselect("Product", product_options, default=default_product)
+    with filter_col2:
         selected_brands = st.multiselect("Brand", sorted(master["BRAND"].dropna().unique().tolist()))
+    with filter_col3:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
         process_clicked = st.form_submit_button("PROSES", use_container_width=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
 if "filter_submitted" not in st.session_state:
     st.session_state["filter_submitted"] = True
