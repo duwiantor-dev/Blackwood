@@ -518,7 +518,9 @@ def render_left_table(df, title):
         for col in df.columns:
             val = row[col]
             try:
-                if pd.notna(val) and isinstance(val, (int, float, np.integer, np.floating)):
+                if isinstance(val, str) and "<span" in val.lower():
+                    display = val
+                elif pd.notna(val) and isinstance(val, (int, float, np.integer, np.floating)):
                     display = f"{int(round(float(val))):,}".replace(",", ".")
                 else:
                     display = "" if pd.isna(val) else str(val)
