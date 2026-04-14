@@ -201,6 +201,30 @@ def _ffill_header(values: List) -> List:
             out.append(last)
     return out
 
+
+def _norm_header_cell(value) -> str:
+    if pd.isna(value) or str(value).strip() == "":
+        return ""
+    return str(value).strip().upper()
+
+def find_div05_stock_columns(columns: List[str], excel_row3_filled: List, excel_row4_raw: List) -> List[str]:
+    row3_vals = [_norm_header_cell(v) for v in excel_row3_filled]
+    row4_vals = [_norm_header_cell(v) for v in excel_row4_raw]
+
+    idx_5b = {i for i, v in enumerate(row4_vals) if v == "5B"}
+
+    ram_start = next((i for i, v in enumerate(row3_vals) if "RAM" in v), None)
+    if ram_start is None:
+        return []
+
+    last_used_idx = max((i for i, v in enumerate(row3_vals) if v != ""), default=None)
+    if last_used_idx is None or ram_start > last_used_idx:
+        return []
+
+    idx_ram_to_right = set(range(ram_start, last_used_idx + 1))
+    final_idx = sorted(idx_5b & idx_ram_to_right)
+    return [columns[i] for i in final_idx if 0 <= i < len(columns)]
+
 def area_code_matches(value, prefixes: List[str]) -> bool:
     if pd.isna(value):
         return False
@@ -302,6 +326,7 @@ def load_mplssr(file) -> pd.DataFrame:
 # =========================================================
 # PRICELIST
 # =========================================================
+
 def parse_pricelist_sheet(xls: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
     raw = xls.parse(sheet_name=sheet_name, header=None).copy()
 
@@ -344,7 +369,7 @@ def parse_pricelist_sheet(xls: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
 
     stock03_cols = [columns[i] for i, area in enumerate(row3) if area_code_matches(area, ["3", "03"])]
     stock04_cols = [columns[i] for i, area in enumerate(row3) if area_code_matches(area, ["4", "04"])]
-    stock05_cols = [columns[i] for i, area in enumerate(row3) if area_code_matches(area, ["5", "05"])]
+    stock05_cols = find_div05_stock_columns(columns, row2, row3)
 
     df["PRICE"] = to_num(df["M3"]) * 1000
     df["STOK_DIV03"] = df[stock03_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1) if stock03_cols else 0
