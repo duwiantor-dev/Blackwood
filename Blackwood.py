@@ -676,7 +676,7 @@ def build_master(sales: pd.DataFrame, stock: pd.DataFrame) -> pd.DataFrame:
     df["STOK_DIVISI"] = df.apply(lambda r: pd.to_numeric(r.get(stock_map[r["DIVISION"]]), errors="coerce"), axis=1).fillna(0)
     return df
 
-def build_segment_table(df, period):
+def build_segment_table(df, period, comparison_division_label="03 OLP"):
     tmp = df[df["PERIOD"] == period].copy()
     tmp["SEGMENT"] = tmp["PRICE"].apply(price_segment)
     seg = tmp.groupby(["SEGMENT", "DIVISION"])["QTY"].sum().unstack().fillna(0).reset_index()
@@ -686,9 +686,12 @@ def build_segment_table(df, period):
     seg = seg[["SEGMENT", "DIV03", "DIV04", "DIV05"]].copy()
     seg = seg.sort_values("SEGMENT", key=lambda s: s.map(segment_sort_key)).reset_index(drop=True)
     seg.columns = ["SEGMENT", "03 OLP", "04 MOD", "05 OLR"]
+
+    compare_col = comparison_division_label if comparison_division_label in ["03 OLP", "04 MOD"] else "03 OLP"
+    seg["DELTA"] = to_num(seg["05 OLR"]).fillna(0) - to_num(seg[compare_col]).fillna(0)
     return seg
 
-def build_brand_table(df, period):
+def build_brand_table(df, period, comparison_division_label="03 OLP"):
     brand = df[df["PERIOD"] == period].copy()
     brand = brand.groupby(["BRAND", "DIVISION"])["QTY"].sum().unstack().fillna(0).reset_index()
     for div in DIVISIONS:
@@ -698,6 +701,9 @@ def build_brand_table(df, period):
     brand["TOTAL"] = brand[["DIV03", "DIV04", "DIV05"]].sum(axis=1)
     brand = brand.sort_values(["TOTAL", "BRAND"], ascending=[False, True]).head(10).drop(columns=["TOTAL"])
     brand.columns = ["BRAND", "03 OLP", "04 MOD", "05 OLR"]
+
+    compare_col = comparison_division_label if comparison_division_label in ["03 OLP", "04 MOD"] else "03 OLP"
+    brand["DELTA"] = to_num(brand["05 OLR"]).fillna(0) - to_num(brand[compare_col]).fillna(0)
     return brand
 
 def render_left_table(df, title, selected_division="05 OLR"):
@@ -746,6 +752,8 @@ def render_left_table(df, title, selected_division="05 OLR"):
 
             style = 'border:1px solid #2b2b2b;padding:6px;text-align:left;'
             if col == selected_division and losing_selected:
+                style += 'color:#c62828;font-weight:700;background:#ffebee;'
+            if col == "DELTA" and is_number(val) and float(val) < 0:
                 style += 'color:#c62828;font-weight:700;background:#ffebee;'
 
             html.append(f'<td style="{style}">{display}</td>')
@@ -829,9 +837,9 @@ def build_main_table_filtered(
 
     out["M3"] = (to_num(out["M3"]).fillna(0) / 1000).round(0)
     compare_map = {"03 OLP": "03 OLP", "04 MOD": "04 MOD"}
-    compare_col = compare_map.get(comparison_division_label, "04 MOD")
-    out["SELISIH_KALAH"] = to_num(out[compare_col]).fillna(0) - to_num(out["05 OLR"]).fillna(0)
-    return out[ordered_cols + ["SELISIH_KALAH"]].sort_values(["SELISIH_KALAH", compare_col, "05 OLR"], ascending=[False, False, True]).reset_index(drop=True)
+    compare_col = compare_map.get(comparison_division_label, "03 OLP")
+    out["DELTA"] = to_num(out["05 OLR"]).fillna(0) - to_num(out[compare_col]).fillna(0)
+    return out[ordered_cols + ["DELTA"]].sort_values(["DELTA", compare_col, "05 OLR"], ascending=[True, False, True]).reset_index(drop=True)
 
 def render_main_table_dynamic(df: pd.DataFrame, comparison_division_label: str):
     display_df = df.copy()
@@ -863,14 +871,14 @@ def render_main_table_dynamic(df: pd.DataFrame, comparison_division_label: str):
     display_df["_LOSS_DIVISION_FLAG"] = display_df.apply(losing_division, axis=1)
     display_df["_STOK_ALERT_FLAG"] = display_df.apply(stok_problem, axis=1)
 
-    visible_df = display_df[["KODEBARANG", "PRODUCT", "BRAND", "SPESIFIKASI", "M3", "03 OLP", "04 MOD", "05 OLR", "STOK"]].copy()
+    visible_df = display_df[["KODEBARANG", "PRODUCT", "BRAND", "SPESIFIKASI", "M3", "03 OLP", "04 MOD", "05 OLR", "DELTA", "STOK"]].copy()
     visible_df["M3"] = pd.to_numeric(visible_df["M3"], errors="coerce").fillna(0).round(0).astype(int)
-    for col in ["03 OLP", "04 MOD", "05 OLR", "STOK"]:
+    for col in ["03 OLP", "04 MOD", "05 OLR", "DELTA", "STOK"]:
         numeric_col = pd.to_numeric(visible_df[col], errors="coerce").fillna(0).round(0)
         visible_df[col] = numeric_col.astype(int)
 
     def fmt_value(val, col_name):
-        if col_name in ["M3", "03 OLP", "04 MOD", "05 OLR", "STOK"]:
+        if col_name in ["M3", "03 OLP", "04 MOD", "05 OLR", "DELTA", "STOK"]:
             try:
                 return f"{int(val)}"
             except Exception:
@@ -890,6 +898,12 @@ def render_main_table_dynamic(df: pd.DataFrame, comparison_division_label: str):
             cls = ""
             if col == "05 OLR" and bool(original["_LOSS_DIVISION_FLAG"]):
                 cls = ' class="bg-red"'
+            if col == "DELTA":
+                try:
+                    if float(original.get("DELTA", 0)) < 0:
+                        cls = ' class="bg-red"'
+                except Exception:
+                    pass
             if col == "STOK" and bool(original["_STOK_ALERT_FLAG"]):
                 cls = ' class="bg-red"'
             html.append(f"<td{cls}>{fmt_value(row[col], col)}</td>")
@@ -983,7 +997,7 @@ with st.form("unified_filter_form"):
     with fcol4:
         selected_segments = st.multiselect("Range Harga", [s[2] for s in PRICE_SEGMENTS] + ["UNKNOWN"])
     with fcol5:
-        comparison_division = st.selectbox("Perbandingan (Versus)", ["03 OLP", "04 MOD"], index=1)
+        comparison_division = st.selectbox("Perbandingan", ["03 OLP", "04 MOD", "05 OLR"], index=1)
     with fcol6:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
         apply_filter = st.form_submit_button("PROSES", use_container_width=True)
@@ -1003,9 +1017,9 @@ if filtered.empty:
 
 left, right = st.columns(2)
 with left:
-    render_left_table(build_segment_table(filtered, selected_period), f"Segmentasi Harga - {selected_period}", selected_division=comparison_division)
+    render_left_table(build_segment_table(filtered, selected_period, comparison_division), f"Segmentasi Harga - {selected_period}", selected_division=comparison_division)
 with right:
-    render_left_table(build_brand_table(filtered, selected_period), f"Segmentasi Brand - {selected_period}", selected_division=comparison_division)
+    render_left_table(build_brand_table(filtered, selected_period, comparison_division), f"Segmentasi Brand - {selected_period}", selected_division=comparison_division)
 
 sales_pivot_alerts = build_sales_pivot_alerts(
     sales_pivot,
