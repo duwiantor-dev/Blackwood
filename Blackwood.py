@@ -272,6 +272,22 @@ def normalize_team_code(value) -> str:
         return f"{m.group(1)} {int(m.group(2))}{m.group(3)}"
     return txt
 
+
+def normalize_combined_warehouse_code(group, wh=None) -> str:
+    parts = []
+    for val in [group, wh]:
+        if pd.isna(val) or str(val).strip() == "":
+            continue
+        txt = str(val).strip().upper()
+        txt = txt.replace(" ", "")
+        parts.append(txt)
+    return "".join(parts)
+
+def normalize_team_lookup_key(value) -> str:
+    if pd.isna(value):
+        return ""
+    return str(value).strip().upper().replace(" ", "").replace("-", "")
+
 def ensure_datetime(series: pd.Series) -> pd.Series:
     return pd.to_datetime(series, errors="coerce")
 
@@ -405,6 +421,7 @@ def load_pricelist(file) -> pd.DataFrame:
 # PRICELIST WITH WAREHOUSES
 # =========================================================
 
+
 def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
     raw = xls.parse(sheet_name=sheet_name, header=None).copy()
 
@@ -433,16 +450,18 @@ def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
 
         if v1 is not None:
             columns.append(v1)
-            warehouse_meta.append((None, None))
+            warehouse_meta.append((None, None, None))
         elif group is not None and wh is not None:
-            columns.append(f"{group}__{wh}__{i}")
-            warehouse_meta.append((group, wh))
+            combined = normalize_combined_warehouse_code(group, wh)
+            columns.append(f"{combined}__{i}")
+            warehouse_meta.append((group, wh, combined))
         elif group is not None:
-            columns.append(f"{group}__{i}")
-            warehouse_meta.append((group, None))
+            combined = normalize_combined_warehouse_code(group)
+            columns.append(f"{combined}__{i}")
+            warehouse_meta.append((group, None, combined))
         else:
             columns.append(f"COL_{i}")
-            warehouse_meta.append((None, None))
+            warehouse_meta.append((None, None, None))
 
     df = raw.iloc[5:].copy().reset_index(drop=True)
     df.columns = columns
@@ -465,19 +484,19 @@ def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
     jkt_stock_cols = []
 
     for i, col in enumerate(columns):
-        group, wh = warehouse_meta[i]
+        group, wh, combined = warehouse_meta[i]
         if group is None:
             continue
 
-        group_clean = str(group).strip().upper().replace(" ", "")
-        wh_clean = normalize_warehouse_code(wh) if wh is not None else None
+        group_clean = normalize_combined_warehouse_code(group)
+        combined_clean = normalize_combined_warehouse_code(combined)
 
         if group_clean == "DEFAULT":
             default_stock_cols.append(col)
         if group_clean == "JKT":
             jkt_stock_cols.append(col)
-        if group_clean and wh_clean:
-            warehouse_stock_cols.setdefault(f"{group_clean} {wh_clean}", []).append(col)
+        if combined_clean:
+            warehouse_stock_cols.setdefault(combined_clean, []).append(col)
 
     if "BRAND" not in df.columns:
         df["BRAND"] = np.nan
@@ -578,6 +597,7 @@ def load_sales_pivot(file) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
+
 def build_sales_pivot_alerts(
     sales_pivot: pd.DataFrame,
     pricelist_wh: pd.DataFrame,
@@ -618,21 +638,20 @@ def build_sales_pivot_alerts(
     def get_stock_cols_by_team(team_code):
         if pd.isna(team_code):
             return []
-        team_code = str(team_code).strip().upper()
-        exact_cols = warehouse_stock_cols.get(team_code, [])
+        lookup_key = normalize_team_lookup_key(team_code)
+
+        exact_cols = warehouse_stock_cols.get(lookup_key, [])
         if isinstance(exact_cols, str):
             exact_cols = [exact_cols]
         exact_cols = [c for c in exact_cols if c in merged.columns]
         if exact_cols:
             return exact_cols
 
-        compact = team_code.replace(" ", "")
         matched = []
-        for col in merged.columns:
-            col_txt = str(col).strip().upper().replace(" ", "")
-            if compact in col_txt:
-                matched.append(col)
-        return matched
+        for wh_key, cols in warehouse_stock_cols.items():
+            if normalize_team_lookup_key(wh_key) == lookup_key:
+                matched.extend(cols if isinstance(cols, list) else [cols])
+        return [c for c in matched if c in merged.columns]
 
     def sum_stock_from_cols(row, cols):
         if not cols:
@@ -647,29 +666,28 @@ def build_sales_pivot_alerts(
         return sum_stock_from_cols(row, cols)
 
     def get_ready_warehouses(row):
-        current_team = str(row.get("TEAM")).strip().upper()
+        current_team_key = normalize_team_lookup_key(row.get("TEAM"))
         ready_list = []
 
         for team_code in team_keys:
-            if team_code == current_team:
+            team_key = normalize_team_lookup_key(team_code)
+            if team_key == current_team_key:
                 continue
 
-            suffix = team_code.split()[-1] if team_code.split() else team_code
+            suffix = re.search(r"(1A|3A|3B|3C|4A|4B)$", team_key)
+            suffix = suffix.group(1) if suffix else ""
             if suffix not in allowed_ready_suffixes:
                 continue
 
-            cols = get_stock_cols_by_team(team_code)
+            cols = warehouse_stock_cols.get(team_code, [])
+            cols = cols if isinstance(cols, list) else [cols]
+            cols = [c for c in cols if c in merged.columns]
             total_stock = sum_stock_from_cols(row, cols)
             if total_stock > 0:
-                ready_list.append((suffix, int(round(total_stock))))
+                ready_list.append((team_key, int(round(total_stock))))
 
-        # Gabungkan per suffix agar tidak dobel
-        agg = {}
-        for suffix, qty in ready_list:
-            agg[suffix] = agg.get(suffix, 0) + qty
-
-        ordered_suffixes = ["1A", "3A", "3B", "3C", "4A", "4B"]
-        return ", ".join([f"{s} {agg[s]}" for s in ordered_suffixes if agg.get(s, 0) > 0])
+        ready_list = sorted(ready_list, key=lambda x: x[0])
+        return ", ".join([f"{code} {qty}" for code, qty in ready_list])
 
     merged["SPESIFIKASI"] = merged.get("SPESIFIKASI", "").fillna("")
     merged["STOK"] = merged.apply(get_current_stock, axis=1)
@@ -991,17 +1009,17 @@ st.markdown("### Upload File")
 upload_col1, upload_col2, upload_col3 = st.columns(3)
 with upload_col1:
     st.markdown("**Upload MPLSSR**")
-    mplssr_file = st.file_uploader("", type=["xlsx", "xls"], key="upload_mplssr_main", label_visibility="collapsed")
+    mplssr_file = st.file_uploader("Upload MPLSSR", type=["xlsx", "xls"], key="upload_mplssr_main", label_visibility="collapsed")
     st.caption("200MB per file • XLSX, XLS")
 
 with upload_col2:
     st.markdown("**Upload Pricelist**")
-    pricelist_file = st.file_uploader("", type=["xlsx", "xls"], key="upload_pricelist_main", label_visibility="collapsed")
+    pricelist_file = st.file_uploader("Upload Pricelist", type=["xlsx", "xls"], key="upload_pricelist_main", label_visibility="collapsed")
     st.caption("200MB per file • XLSX, XLS")
 
 with upload_col3:
     st.markdown("**Upload SALES PIVOT**")
-    sales_pivot_file = st.file_uploader("", type=["xlsx", "xls"], key="upload_sales_pivot_main", label_visibility="collapsed")
+    sales_pivot_file = st.file_uploader("Upload Sales Pivot", type=["xlsx", "xls"], key="upload_sales_pivot_main", label_visibility="collapsed")
     st.caption("200MB per file • XLSX, XLS")
 
 all_required_uploaded = all([mplssr_file is not None, pricelist_file is not None, sales_pivot_file is not None])
