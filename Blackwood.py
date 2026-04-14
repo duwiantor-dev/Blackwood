@@ -404,36 +404,41 @@ def load_pricelist(file) -> pd.DataFrame:
 # =========================================================
 # PRICELIST WITH WAREHOUSES
 # =========================================================
+
 def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
     raw = xls.parse(sheet_name=sheet_name, header=None).copy()
 
     if sheet_name.upper() == "LAPTOP":
-        coming_idx = first_row_contains_text(raw, "COMING")
-        end_coming_idx = first_row_contains_text(raw, "END COMING")
-        if coming_idx is not None and end_coming_idx is not None and end_coming_idx >= coming_idx:
-            raw = raw.drop(index=range(coming_idx, end_coming_idx + 1)).reset_index(drop=True)
+        col_c = raw.iloc[:, 2].astype(str).str.upper().str.strip() if raw.shape[1] > 2 else pd.Series(dtype=str)
+        coming_candidates = col_c[col_c.str.contains("COMING", na=False)]
+        end_coming_candidates = col_c[col_c.str.contains("END COMING", na=False)]
+        if not coming_candidates.empty and not end_coming_candidates.empty:
+            coming_idx = int(coming_candidates.index.min())
+            end_coming_idx = int(end_coming_candidates.index.max())
+            if end_coming_idx >= coming_idx:
+                raw = raw.drop(index=range(coming_idx, end_coming_idx + 1)).reset_index(drop=True)
 
     row1 = raw.iloc[1].tolist()
     row2 = _ffill_header(raw.iloc[2].tolist())
-    row3 = [str(x).strip().upper() if pd.notna(x) and str(x).strip() != "" else None for x in raw.iloc[3].tolist()]
-    row4 = [str(x).strip().upper() if pd.notna(x) and str(x).strip() != "" else None for x in raw.iloc[4].tolist()] if len(raw) > 4 else [None] * len(row1)
+    row3 = _ffill_header(raw.iloc[3].tolist())
+    row4 = _ffill_header(raw.iloc[4].tolist()) if len(raw) > 4 else [None] * len(row1)
 
     columns = []
     warehouse_meta = []
 
     for i, v in enumerate(row1):
         v1 = str(v).strip().upper() if pd.notna(v) and str(v).strip() != "" else None
-        group = row3[i]
-        wh = row4[i]
+        group = str(row3[i]).strip().upper() if pd.notna(row3[i]) and str(row3[i]).strip() != "" else None
+        wh = str(row4[i]).strip().upper() if pd.notna(row4[i]) and str(row4[i]).strip() != "" else None
 
         if v1 is not None:
             columns.append(v1)
             warehouse_meta.append((None, None))
         elif group is not None and wh is not None:
-            columns.append(f"{group}__{wh}")
+            columns.append(f"{group}__{wh}__{i}")
             warehouse_meta.append((group, wh))
         elif group is not None:
-            columns.append(group)
+            columns.append(f"{group}__{i}")
             warehouse_meta.append((group, None))
         else:
             columns.append(f"COL_{i}")
@@ -463,6 +468,7 @@ def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
         group, wh = warehouse_meta[i]
         if group is None:
             continue
+
         group_clean = str(group).strip().upper().replace(" ", "")
         wh_clean = normalize_warehouse_code(wh) if wh is not None else None
 
@@ -471,16 +477,30 @@ def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
         if group_clean == "JKT":
             jkt_stock_cols.append(col)
         if group_clean and wh_clean:
-            warehouse_stock_cols[f"{group_clean} {wh_clean}"] = col
+            warehouse_stock_cols.setdefault(f"{group_clean} {wh_clean}", []).append(col)
 
     if "BRAND" not in df.columns:
         df["BRAND"] = np.nan
     df["BRAND"] = normalize_text(df["BRAND"])
     df["PRICE_SEGMENT"] = df["PRICE"].apply(price_segment)
-    keep_cols = ["SKU NO", "PRODUCT", "BRAND", "KODEBARANG", "SPESIFIKASI", "PRICE", "PRICE_SEGMENT"] + list(set(default_stock_cols + jkt_stock_cols + list(warehouse_stock_cols.values())))
+
+    mapped_cols = []
+    for cols in warehouse_stock_cols.values():
+        mapped_cols.extend(cols)
+
+    keep_cols = [
+        "SKU NO", "PRODUCT", "BRAND", "KODEBARANG", "SPESIFIKASI", "PRICE", "PRICE_SEGMENT"
+    ] + list(dict.fromkeys(default_stock_cols + jkt_stock_cols + mapped_cols))
+
     out = df[keep_cols].copy()
     out = out.loc[:, ~out.columns.duplicated()].copy()
-    out["DEFAULT_STOCK_TOTAL"] = df.loc[:, ~df.columns.duplicated()][default_stock_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1) if default_stock_cols else 0
+    out["DEFAULT_STOCK_TOTAL"] = (
+        df.loc[:, ~df.columns.duplicated()][default_stock_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
+        .sum(axis=1)
+        if default_stock_cols else 0
+    )
     return out, warehouse_stock_cols
 
 def load_pricelist_with_warehouses(file):
@@ -557,6 +577,7 @@ def load_sales_pivot(file) -> pd.DataFrame:
         ["PERIOD", "QTY", "TEAM", "KODE BARANG"], ascending=[True, False, True, True]
     ).reset_index(drop=True)
 
+
 def build_sales_pivot_alerts(
     sales_pivot: pd.DataFrame,
     pricelist_wh: pd.DataFrame,
@@ -592,43 +613,63 @@ def build_sales_pivot_alerts(
 
     merged = base.merge(pl, how="left", left_on="KODE BARANG", right_on="KODEBARANG")
 
-    def find_stock_col_by_team(team_code):
+    allowed_ready_suffixes = {"1A", "3A", "3B", "3C", "4A", "4B"}
+
+    def get_stock_cols_by_team(team_code):
         if pd.isna(team_code):
-            return None
+            return []
         team_code = str(team_code).strip().upper()
-        exact_col = warehouse_stock_cols.get(team_code)
-        if exact_col and exact_col in merged.columns:
-            return exact_col
+        exact_cols = warehouse_stock_cols.get(team_code, [])
+        if isinstance(exact_cols, str):
+            exact_cols = [exact_cols]
+        exact_cols = [c for c in exact_cols if c in merged.columns]
+        if exact_cols:
+            return exact_cols
+
         compact = team_code.replace(" ", "")
+        matched = []
         for col in merged.columns:
             col_txt = str(col).strip().upper().replace(" ", "")
             if compact in col_txt:
-                return col
-        return None
+                matched.append(col)
+        return matched
 
-    all_ready_codes = sorted([str(k).strip().upper() for k in warehouse_stock_cols.keys() if str(k).strip().upper() != "DEFAULT"])
+    def sum_stock_from_cols(row, cols):
+        if not cols:
+            return 0.0
+        values = pd.to_numeric(pd.Series([row.get(c, 0) for c in cols]), errors="coerce").fillna(0)
+        return float(values.sum())
+
+    team_keys = sorted([str(k).strip().upper() for k in warehouse_stock_cols.keys() if str(k).strip().upper() != "DEFAULT"])
 
     def get_current_stock(row):
-        stock_col = find_stock_col_by_team(row.get("TEAM"))
-        if stock_col and stock_col in row.index:
-            val = pd.to_numeric(row[stock_col], errors="coerce")
-            return 0 if pd.isna(val) else float(val)
-        return 0.0
+        cols = get_stock_cols_by_team(row.get("TEAM"))
+        return sum_stock_from_cols(row, cols)
 
     def get_ready_warehouses(row):
         current_team = str(row.get("TEAM")).strip().upper()
         ready_list = []
-        for team_code in all_ready_codes:
+
+        for team_code in team_keys:
             if team_code == current_team:
                 continue
-            stock_col = find_stock_col_by_team(team_code)
-            if not stock_col:
+
+            suffix = team_code.split()[-1] if team_code.split() else team_code
+            if suffix not in allowed_ready_suffixes:
                 continue
-            val = pd.to_numeric(row.get(stock_col), errors="coerce")
-            val = 0 if pd.isna(val) else float(val)
-            if val > 0:
-                ready_list.append(team_code)
-        return ", ".join(ready_list)
+
+            cols = get_stock_cols_by_team(team_code)
+            total_stock = sum_stock_from_cols(row, cols)
+            if total_stock > 0:
+                ready_list.append((suffix, int(round(total_stock))))
+
+        # Gabungkan per suffix agar tidak dobel
+        agg = {}
+        for suffix, qty in ready_list:
+            agg[suffix] = agg.get(suffix, 0) + qty
+
+        ordered_suffixes = ["1A", "3A", "3B", "3C", "4A", "4B"]
+        return ", ".join([f"{s} {agg[s]}" for s in ordered_suffixes if agg.get(s, 0) > 0])
 
     merged["SPESIFIKASI"] = merged.get("SPESIFIKASI", "").fillna("")
     merged["STOK"] = merged.apply(get_current_stock, axis=1)
