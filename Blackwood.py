@@ -652,7 +652,9 @@ except Exception as e:
 product_options = sorted(master["PRODUCT_FINAL"].dropna().unique().tolist())
 default_product = ["LAPTOP R"] if "LAPTOP R" in product_options else []
 
-with top_right:
+filter_left, filter_right = st.columns([2,1])
+
+with filter_right:
     st.markdown("### Filter Produk")
     with st.form("filter_form"):
         selected_products = st.multiselect("Product", product_options, default=default_product)
