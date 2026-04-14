@@ -1,5 +1,6 @@
 
 import io
+import re
 from typing import List
 
 import numpy as np
@@ -627,6 +628,180 @@ def render_main_table_dynamic(df: pd.DataFrame, selected_division_label: str, se
     return visible_df
 
 
+
+def normalize_warehouse_code(value) -> str:
+    if pd.isna(value):
+        return np.nan
+    txt = str(value).strip().upper()
+    if "-" in txt:
+        txt = txt.split("-", 1)[1]
+    txt = txt.replace(" ", "")
+    txt = re.sub(r"0+(?=\d)", "", txt)
+    txt = txt.replace("0A", "A").replace("0B", "B").replace("0C", "C")
+    return txt
+
+def load_sales_pivot(file) -> pd.DataFrame:
+    raw = pd.read_excel(file, header=1)
+    raw = raw.iloc[2:].copy().reset_index(drop=True)
+    raw.columns = [str(c).strip().upper() for c in raw.columns]
+
+    gudang_col = next((c for c in raw.columns if "GUDANG" in c), None)
+    sku_col = next((c for c in raw.columns if "SKU" in c), None)
+    qty_col = next((c for c in raw.columns if "QTY" in c or "TERJUAL" in c or "PCS" in c), None)
+
+    if gudang_col is None or sku_col is None or qty_col is None:
+        raise ValueError("Format SALES PIVOT tidak cocok. Pastikan ada kolom GUDANG, SKU NO, dan QTY.")
+
+    df = raw[[gudang_col, sku_col, qty_col]].copy()
+    df.columns = ["GUDANG_RAW", "SKU NO", "QTY"]
+    df["SKU NO"] = normalize_text(df["SKU NO"])
+    df["QTY"] = to_num(df["QTY"]).fillna(0)
+    df["GUDANG_CODE"] = df["GUDANG_RAW"].apply(normalize_warehouse_code)
+
+    df = df[df["SKU NO"].notna()].copy()
+    df = df[df["GUDANG_CODE"].notna()].copy()
+    df = df[df["QTY"] > 0].copy()
+
+    return (
+        df.groupby(["SKU NO", "GUDANG_CODE"], as_index=False)["QTY"]
+        .sum()
+        .sort_values(["QTY", "SKU NO"], ascending=[False, True])
+        .reset_index(drop=True)
+    )
+
+def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
+    raw = xls.parse(sheet_name=sheet_name, header=None).copy()
+
+    if sheet_name.upper() == "LAPTOP":
+        coming_idx = first_row_contains_text(raw, "COMING")
+        end_coming_idx = first_row_contains_text(raw, "END COMING")
+        if coming_idx is not None and end_coming_idx is not None and end_coming_idx >= coming_idx:
+            raw = raw.drop(index=range(coming_idx, end_coming_idx + 1)).reset_index(drop=True)
+
+    row1 = raw.iloc[1].tolist()
+    row2 = _ffill_header(raw.iloc[2].tolist())
+    row3 = [str(x).strip().upper() if pd.notna(x) and str(x).strip() != "" else None for x in raw.iloc[3].tolist()]
+    row4 = [str(x).strip().upper() if pd.notna(x) and str(x).strip() != "" else None for x in raw.iloc[4].tolist()]
+
+    columns = []
+    warehouse_meta = []
+    for i, v in enumerate(row1):
+        v1 = str(v).strip().upper() if pd.notna(v) and str(v).strip() != "" else None
+        group = row2[i]
+        area = row3[i]
+        wh = row4[i]
+
+        if v1 is not None:
+            columns.append(v1)
+            warehouse_meta.append((None, None, None))
+        elif group is not None and area is not None and wh is not None:
+            columns.append(f"{group}__{area}__{wh}")
+            warehouse_meta.append((group, area, wh))
+        elif area is not None and wh is not None:
+            columns.append(f"{area}__{wh}")
+            warehouse_meta.append((None, area, wh))
+        elif area is not None:
+            columns.append(area)
+            warehouse_meta.append((None, area, None))
+        else:
+            columns.append(f"COL_{i}")
+            warehouse_meta.append((None, None, None))
+
+    df = raw.iloc[5:].copy().reset_index(drop=True)
+    df.columns = columns
+
+    for c in ["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "TOT", "M3"]:
+        if c not in df.columns:
+            df[c] = np.nan
+
+    df["SKU NO"] = normalize_text(df["SKU NO"])
+    df["PRODUCT"] = normalize_text(df["PRODUCT"])
+    df["KODEBARANG"] = normalize_text(df["KODEBARANG"])
+    df["SPESIFIKASI"] = normalize_text(df["SPESIFIKASI"])
+    df = df[df["KODEBARANG"].notna()].copy()
+    df = df[~df["KODEBARANG"].isin(["TOTAL"])].copy()
+
+    df["PRICE"] = to_num(df["M3"]) * 1000
+    df["CATEGORY"] = sheet_name.upper()
+    df["PRICE_SEGMENT"] = df["PRICE"].apply(price_segment)
+
+    warehouse_stock_cols = {}
+    default_stock_cols = []
+
+    for i, col in enumerate(columns):
+        group, area, wh = warehouse_meta[i]
+        if group is not None and wh is not None:
+            group_clean = str(group).strip().upper().replace(" ", "")
+            wh_clean = normalize_warehouse_code(wh)
+            if group_clean == "DEFAULT":
+                default_stock_cols.append(col)
+            if wh_clean:
+                warehouse_stock_cols[wh_clean] = col
+
+    keep_cols = ["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "PRICE", "CATEGORY", "PRICE_SEGMENT"] + list(set(default_stock_cols + list(warehouse_stock_cols.values())))
+    out = df[keep_cols].copy()
+    out["DEFAULT_STOCK_TOTAL"] = df[default_stock_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1) if default_stock_cols else 0
+    return out, warehouse_stock_cols
+
+def load_pricelist_with_warehouses(file):
+    xls = pd.ExcelFile(file)
+    sheets = [s for s in xls.sheet_names if s.upper() in VALID_PRICELIST_SHEETS]
+    frames = []
+    merged_map = {}
+    for s in sheets:
+        part, part_map = parse_pricelist_sheet_with_warehouses(xls, s)
+        frames.append(part)
+        merged_map.update(part_map)
+
+    if not frames:
+        return pd.DataFrame(), {}
+
+    out = pd.concat(frames, ignore_index=True)
+    out = out.drop_duplicates(subset=["SKU NO", "KODEBARANG"], keep="first").reset_index(drop=True)
+    return out, merged_map
+
+def build_sales_pivot_alerts(sales_pivot: pd.DataFrame, pricelist_wh: pd.DataFrame, warehouse_stock_cols: dict) -> pd.DataFrame:
+    if sales_pivot.empty or pricelist_wh.empty:
+        return pd.DataFrame(columns=["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "GUDANG", "QTY SALES", "STOK GUDANG", "STOK DEFAULT"])
+
+    base = sales_pivot[sales_pivot["QTY"] >= 3].copy()
+    if base.empty:
+        return pd.DataFrame(columns=["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "GUDANG", "QTY SALES", "STOK GUDANG", "STOK DEFAULT"])
+
+    warehouse_cols = list(set(warehouse_stock_cols.values()))
+    needed_cols = ["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "DEFAULT_STOCK_TOTAL"] + warehouse_cols
+    pl = pricelist_wh[[c for c in needed_cols if c in pricelist_wh.columns]].copy()
+
+    merged = base.merge(pl, how="left", on="SKU NO")
+
+    def get_wh_stock(row):
+        wh_code = row.get("GUDANG_CODE")
+        stock_col = warehouse_stock_cols.get(wh_code)
+        if stock_col and stock_col in row.index:
+            return float(pd.to_numeric(row[stock_col], errors="coerce")) if pd.notna(row[stock_col]) else 0
+        return 0
+
+    merged["WAREHOUSE_STOCK"] = merged.apply(get_wh_stock, axis=1)
+    merged["DEFAULT_STOCK_TOTAL"] = to_num(merged["DEFAULT_STOCK_TOTAL"]).fillna(0)
+
+    merged = merged[(merged["WAREHOUSE_STOCK"] <= 0) & (merged["DEFAULT_STOCK_TOTAL"] >= 3)].copy()
+
+    out = merged[["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "GUDANG_CODE", "QTY", "WAREHOUSE_STOCK", "DEFAULT_STOCK_TOTAL"]].copy()
+    out.columns = ["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "GUDANG", "QTY SALES", "STOK GUDANG", "STOK DEFAULT"]
+    out = out.sort_values(["QTY SALES", "STOK DEFAULT"], ascending=[False, False]).reset_index(drop=True)
+    return out
+
+def render_sales_pivot_alert_table(df: pd.DataFrame):
+    if df.empty:
+        st.info("Belum ada alert SALES PIVOT dengan rule qty sales >= 3, stok gudang kosong, dan stok default minimal 3.")
+        return
+
+    show_df = df.copy()
+    for col in ["QTY SALES", "STOK GUDANG", "STOK DEFAULT"]:
+        show_df[col] = pd.to_numeric(show_df[col], errors="coerce").fillna(0).round(0).astype(int)
+
+    st.dataframe(show_df, use_container_width=True, height=320)
+
 # =========================================================
 # UI
 # =========================================================
@@ -646,6 +821,8 @@ try:
     sales = load_mplssr(mplssr_file)
     stock = load_pricelist(pricelist_file)
     master = build_master(sales, stock)
+    pricelist_wh, warehouse_stock_cols = load_pricelist_with_warehouses(pricelist_file)
+    sales_pivot = load_sales_pivot(sales_pivot_file) if sales_pivot_file is not None else pd.DataFrame()
 except Exception as e:
     st.error(f"Gagal membaca file: {e}")
     st.stop()
@@ -809,6 +986,14 @@ with right:
     )
 
 
+st.markdown("### Alert SALES PIVOT")
+if sales_pivot_file is None:
+    st.info("Upload SALES PIVOT untuk melihat alert penjualan tinggi di gudang tertentu saat stok gudang kosong tetapi stok default masih ada.")
+    sales_pivot_alerts = pd.DataFrame()
+else:
+    sales_pivot_alerts = build_sales_pivot_alerts(sales_pivot, pricelist_wh, warehouse_stock_cols)
+    render_sales_pivot_alert_table(sales_pivot_alerts)
+
 st.markdown("### Tabel Utama Analisa")
 
 with st.form("main_table_form"):
@@ -866,3 +1051,5 @@ with st.expander("Debug hasil parsing"):
     st.write("Sample Pricelist:", stock.head(20))
     st.write("Sample Master:", master.head(20))
     st.write("Sample Main Table:", main_table_export.head(20))
+    st.write("Sample SALES PIVOT:", sales_pivot.head(20) if sales_pivot_file is not None else "Belum upload SALES PIVOT")
+    st.write("Sample SALES PIVOT Alerts:", sales_pivot_alerts.head(20) if sales_pivot_file is not None else "Belum upload SALES PIVOT")
