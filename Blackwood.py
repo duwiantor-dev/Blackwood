@@ -630,10 +630,9 @@ def render_main_table_dynamic(df: pd.DataFrame, selected_division_label: str, se
 # =========================================================
 # UI
 # =========================================================
-st.title("Dashboard Analisa Produk")
 
 
-st.sidebar.header("Upload File")
+# sidebar removed
 mplssr_file = st.sidebar.file_uploader("Upload MPLSSR", type=["xlsx", "xls"])
 pricelist_file = st.sidebar.file_uploader("Upload Pricelist", type=["xlsx", "xls"])
 
