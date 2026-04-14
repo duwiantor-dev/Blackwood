@@ -486,7 +486,20 @@ def build_sales_pivot_alerts(sales_pivot: pd.DataFrame, pricelist_wh: pd.DataFra
     merged = base.merge(pl, how="left", left_on="KODE BARANG", right_on="KODEBARANG")
 
     ready_codes = ["1A", "3A", "3B", "3C", "4A", "4B", "5B"]
-    ready_cols = {code: warehouse_stock_cols.get(code) for code in ready_codes if warehouse_stock_cols.get(code) in merged.columns}
+
+    def find_stock_col_by_code(code):
+        exact_col = warehouse_stock_cols.get(code)
+        if exact_col in merged.columns:
+            return exact_col
+
+        code_clean = str(code).strip().upper()
+        for col in merged.columns:
+            col_txt = str(col).strip().upper().replace(" ", "")
+            if f"__{code_clean}" in col_txt or col_txt.endswith(code_clean):
+                return col
+        return None
+
+    ready_cols = {code: find_stock_col_by_code(code) for code in ready_codes}
 
     def get_current_stock(row):
         gudang_code = normalize_warehouse_code(row.get("KODE GUDANG"))
@@ -513,7 +526,13 @@ def build_sales_pivot_alerts(sales_pivot: pd.DataFrame, pricelist_wh: pd.DataFra
 
     merged["STOK"] = merged.apply(get_current_stock, axis=1)
     merged["GUDANG READY"] = merged.apply(get_ready_warehouses, axis=1)
-    merged["KET"] = np.where((merged["QTY"] > 0) & (merged["STOK"] <= 0) & (merged["GUDANG READY"] != ""), "REFILL", "")
+    merged["KET"] = np.where(
+        (merged["QTY"] > 0) &
+        (merged["STOK"] <= 0) &
+        (merged["GUDANG READY"].astype(str).str.strip() != ""),
+        "REFILL",
+        ""
+    )
 
     merged = merged[merged["KET"] == "REFILL"].copy()
     if merged.empty:
