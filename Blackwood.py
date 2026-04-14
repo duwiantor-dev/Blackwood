@@ -546,11 +546,16 @@ def render_main_table_dynamic(df: pd.DataFrame, selected_division_label: str, se
 
     styled = visible_df.style.apply(highlight_row, axis=1)
 
+    
+    # Force left alignment for all columns
+    styled = styled.set_properties(**{"text-align": "left"})
+
     st.dataframe(
         styled,
         use_container_width=True,
         height=520,
     )
+
 
     return visible_df
 
