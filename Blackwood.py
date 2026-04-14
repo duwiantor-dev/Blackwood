@@ -480,8 +480,9 @@ def build_sales_pivot_alerts(sales_pivot: pd.DataFrame, pricelist_wh: pd.DataFra
     if base.empty:
         return pd.DataFrame(columns=empty_cols)
 
-    pl_needed = ["KODEBARANG", "SPESIFIKASI"] + list(set(warehouse_stock_cols.values()))
-    pl = pricelist_wh[[c for c in pl_needed if c in pricelist_wh.columns]].copy()
+    pl = pricelist_wh.copy()
+    if "KODEBARANG" not in pl.columns:
+        return pd.DataFrame(columns=empty_cols)
 
     merged = base.merge(pl, how="left", left_on="KODE BARANG", right_on="KODEBARANG")
 
@@ -489,7 +490,7 @@ def build_sales_pivot_alerts(sales_pivot: pd.DataFrame, pricelist_wh: pd.DataFra
 
     def find_stock_col_by_code(code):
         exact_col = warehouse_stock_cols.get(code)
-        if exact_col in merged.columns:
+        if exact_col and exact_col in merged.columns:
             return exact_col
 
         code_clean = str(code).strip().upper()
@@ -504,9 +505,18 @@ def build_sales_pivot_alerts(sales_pivot: pd.DataFrame, pricelist_wh: pd.DataFra
     def get_current_stock(row):
         gudang_code = normalize_warehouse_code(row.get("KODE GUDANG"))
         stock_col = warehouse_stock_cols.get(gudang_code)
+
         if stock_col and stock_col in row.index:
             val = pd.to_numeric(row[stock_col], errors="coerce")
             return 0 if pd.isna(val) else float(val)
+
+        # fallback: try partial match from merged columns
+        if gudang_code:
+            for col in merged.columns:
+                col_txt = str(col).strip().upper().replace(" ", "")
+                if f"__{gudang_code}" in col_txt or col_txt.endswith(str(gudang_code)):
+                    val = pd.to_numeric(row.get(col), errors="coerce")
+                    return 0 if pd.isna(val) else float(val)
         return 0.0
 
     def get_ready_warehouses(row):
@@ -524,32 +534,58 @@ def build_sales_pivot_alerts(sales_pivot: pd.DataFrame, pricelist_wh: pd.DataFra
                 ready_list.append(code)
         return ", ".join(ready_list)
 
+    merged["SPESIFIKASI"] = merged.get("SPESIFIKASI")
     merged["STOK"] = merged.apply(get_current_stock, axis=1)
     merged["GUDANG READY"] = merged.apply(get_ready_warehouses, axis=1)
     merged["KET"] = np.where(
-        (merged["QTY"] > 0) &
-        (merged["STOK"] <= 0) &
+        (to_num(merged["QTY"]).fillna(0) > 0) &
+        (to_num(merged["STOK"]).fillna(0) <= 0) &
         (merged["GUDANG READY"].astype(str).str.strip() != ""),
         "REFILL",
         ""
     )
 
-    merged = merged[merged["KET"] == "REFILL"].copy()
-    if merged.empty:
-        return pd.DataFrame(columns=empty_cols)
+    # Fokus munculkan tabel dulu:
+    # - prioritas baris REFILL
+    # - kalau belum ada REFILL, tetap tampilkan kandidat terdekat
+    refill_df = merged[merged["KET"] == "REFILL"].copy()
 
-    merged["KEBUTUHAN_STOK"] = to_num(merged["QTY"]).fillna(0) - to_num(merged["STOK"]).fillna(0)
+    if refill_df.empty:
+        merged["KET"] = np.where(
+            (to_num(merged["QTY"]).fillna(0) > 0) &
+            (to_num(merged["STOK"]).fillna(0) <= 0),
+            "CEK",
+            merged["KET"]
+        )
+        candidate_df = merged[(to_num(merged["QTY"]).fillna(0) > 0) & (to_num(merged["STOK"]).fillna(0) <= 0)].copy()
+        work_df = candidate_df
+    else:
+        work_df = refill_df
 
-    out = merged[["KODE GUDANG", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY", "KEBUTUHAN_STOK"]].copy()
+    if work_df.empty:
+        # Last fallback: tampilkan top sales pivot agar tabel tetap muncul
+        work_df = merged.copy()
+        work_df["KET"] = np.where(work_df["KET"].astype(str).str.strip() == "", "CEK", work_df["KET"])
+
+    work_df["SPESIFIKASI"] = work_df["SPESIFIKASI"].fillna("")
+    work_df["QTY"] = to_num(work_df["QTY"]).fillna(0)
+    work_df["STOK"] = to_num(work_df["STOK"]).fillna(0)
+    work_df["KEBUTUHAN_STOK"] = work_df["QTY"] - work_df["STOK"]
+
+    out = work_df[["KODE GUDANG", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY", "KEBUTUHAN_STOK"]].copy()
     out["QTY"] = pd.to_numeric(out["QTY"], errors="coerce").fillna(0).round(0).astype(int)
     out["STOK"] = pd.to_numeric(out["STOK"], errors="coerce").fillna(0).round(0).astype(int)
 
-    out = out.sort_values(["KEBUTUHAN_STOK", "QTY", "KODE GUDANG", "KODE BARANG"], ascending=[False, False, True, True]).reset_index(drop=True)
+    out = out.sort_values(
+        ["KET", "KEBUTUHAN_STOK", "QTY", "KODE GUDANG", "KODE BARANG"],
+        ascending=[True, False, False, True, True]
+    ).reset_index(drop=True)
+
     return out[["KODE GUDANG", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY"]]
 
 def render_sales_pivot_alert_table(df: pd.DataFrame):
     if df.empty:
-        st.info("Belum ada Analisa Stok dengan kondisi REFILL: ada penjualan, stok gudang kosong, dan ada stok di gudang pusat lain.")
+        st.info("Analisa Stok belum menemukan data.")
         return
 
     show_df = df.copy()
@@ -566,7 +602,7 @@ def render_sales_pivot_alert_table(df: pd.DataFrame):
         html.append("<tr>")
         for col in show_df.columns:
             cls = ""
-            if col in ["STOK", "KET"]:
+            if col in ["STOK", "KET"] and str(row.get("KET", "")).strip().upper() in ["REFILL", "CEK"]:
                 cls = ' class="bg-red"'
             html.append(f"<td{cls}>{row[col]}</td>")
         html.append("</tr>")
@@ -955,24 +991,3 @@ main_table_export = render_main_table_dynamic(main_table_export, main_division_l
 
 st.markdown("### Analisa Stok")
 render_sales_pivot_alert_table(sales_pivot_alerts)
-
-out = io.BytesIO()
-with pd.ExcelWriter(out, engine="openpyxl") as writer:
-    main_table_export.to_excel(writer, index=False, sheet_name="main_table")
-    if not sales_pivot_alerts.empty:
-        sales_pivot_alerts.to_excel(writer, index=False, sheet_name="analisa_stok")
-
-st.download_button(
-    "Download hasil analisa",
-    data=out.getvalue(),
-    file_name="dashboard_analisa_produk.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-)
-
-with st.expander("Debug hasil parsing"):
-    st.write("Sample MPLSSR:", sales.head(20))
-    st.write("Sample Pricelist:", stock.head(20))
-    st.write("Sample Master:", master.head(20))
-    st.write("Sample Main Table:", main_table_export.head(20))
-    st.write("Sample SALES PIVOT:", sales_pivot.head(20))
-    st.write("Sample SALES PIVOT Alerts:", sales_pivot_alerts.head(20))
