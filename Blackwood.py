@@ -531,7 +531,7 @@ def render_main_table_dynamic(df: pd.DataFrame, selected_division_label: str, se
 
     for col in ["03 OLP", "04 MOD", "05 OLR", "STOK"]:
         numeric_col = pd.to_numeric(visible_df[col], errors="coerce").fillna(0).round(0)
-        visible_df[col] = numeric_col.apply(lambda x: "" if float(x) == 0 else int(x))
+        visible_df[col] = numeric_col.astype(int)
 
     def highlight_row(row):
         styles = [""] * len(row)
@@ -692,21 +692,31 @@ def render_left_table(df, title, selected_division="05 OLR"):
     html.append("</tbody></table></div></div>")
     st.markdown("".join(html), unsafe_allow_html=True)
 
-seg_filter_col1, seg_filter_col2, seg_filter_col3 = st.columns([1, 1, 3])
-with seg_filter_col1:
-    segmentasi_period = st.selectbox(
-        "Filter Segmentasi",
-        PERIODS,
-        index=0,
-        key="segmentasi_period_top",
-    )
-with seg_filter_col2:
-    selected_division_segment = st.selectbox(
-        "Filter Divisi",
-        ["03 OLP", "04 MOD", "05 OLR"],
-        index=2,
-        key="segmentasi_division_top",
-    )
+with st.form("segmentasi_form"):
+    seg_filter_col1, seg_filter_col2, seg_filter_col3 = st.columns([1, 1, 0.5])
+    with seg_filter_col1:
+        segmentasi_period = st.selectbox(
+            "Filter Segmentasi",
+            PERIODS,
+            index=0,
+            key="segmentasi_period_top",
+        )
+    with seg_filter_col2:
+        selected_division_segment = st.selectbox(
+            "Filter Divisi",
+            ["03 OLP", "04 MOD", "05 OLR"],
+            index=2,
+            key="segmentasi_division_top",
+        )
+    with seg_filter_col3:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        segmentasi_process = st.form_submit_button("PROSES")
+
+if "segmentasi_submitted" not in st.session_state:
+    st.session_state["segmentasi_submitted"] = True
+
+if segmentasi_process:
+    st.session_state["segmentasi_submitted"] = True
 
 left, right = st.columns(2)
 
@@ -727,25 +737,35 @@ with right:
 
 st.markdown("### Tabel Utama Analisa")
 
-main_filter_col1, main_filter_col2, main_filter_col3, main_filter_col4, main_filter_col5 = st.columns([1, 1, 1, 1.4, 1.4])
-with main_filter_col1:
-    main_period = st.selectbox("Filter Period", PERIODS, index=0, key="main_period_filter")
-with main_filter_col2:
-    main_division_label = st.selectbox("Filter Divisi", ["03 OLP", "04 MOD", "05 OLR"], index=2, key="main_division_filter")
-with main_filter_col3:
-    main_stock_division = st.selectbox("Filter Stok Divisi", ["03 OLP", "04 MOD", "05 OLR"], index=2, key="main_stock_division_filter")
-with main_filter_col4:
-    main_segment_filter = st.multiselect(
-        "Filter Segmentasi",
-        [s[2] for s in PRICE_SEGMENTS] + ["UNKNOWN"],
-        key="main_segment_filter",
-    )
-with main_filter_col5:
-    main_brand_filter = st.multiselect(
-        "Filter Brand",
-        sorted(filtered["BRAND"].dropna().unique().tolist()),
-        key="main_brand_filter",
-    )
+with st.form("main_table_form"):
+    main_filter_col1, main_filter_col2, main_filter_col3, main_filter_col4, main_filter_col5, main_filter_col6 = st.columns([1, 1, 1, 1.4, 1.4, 0.6])
+    with main_filter_col1:
+        main_period = st.selectbox("Filter Period", PERIODS, index=0, key="main_period_filter")
+    with main_filter_col2:
+        main_division_label = st.selectbox("Filter Divisi", ["03 OLP", "04 MOD", "05 OLR"], index=2, key="main_division_filter")
+    with main_filter_col3:
+        main_stock_division = st.selectbox("Filter Stok Divisi", ["03 OLP", "04 MOD", "05 OLR"], index=2, key="main_stock_division_filter")
+    with main_filter_col4:
+        main_segment_filter = st.multiselect(
+            "Filter Segmentasi",
+            [s[2] for s in PRICE_SEGMENTS] + ["UNKNOWN"],
+            key="main_segment_filter",
+        )
+    with main_filter_col5:
+        main_brand_filter = st.multiselect(
+            "Filter Brand",
+            sorted(filtered["BRAND"].dropna().unique().tolist()),
+            key="main_brand_filter",
+        )
+    with main_filter_col6:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        main_process = st.form_submit_button("PROSES")
+
+if "main_table_submitted" not in st.session_state:
+    st.session_state["main_table_submitted"] = True
+
+if main_process:
+    st.session_state["main_table_submitted"] = True
 
 main_table_export = build_main_table_filtered(
     filtered,
