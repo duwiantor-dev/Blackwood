@@ -257,6 +257,22 @@ def normalize_sales_pivot_gudang(value) -> str:
     return txt
 
 
+def normalize_display_team_code(value) -> str:
+    if pd.isna(value):
+        return np.nan
+    txt = str(value).strip().upper()
+    if "-" in txt:
+        txt = txt.split("-", 1)[1]
+    txt = txt.replace("_", "").replace(" ", "")
+    m = re.match(r"([A-Z]+)0*(\d+)([A-Z])?$", txt)
+    if m:
+        prefix = m.group(1)
+        number = int(m.group(2))
+        suffix = m.group(3) if m.group(3) else "A"
+        return f"{prefix} {number}{suffix}"
+    return txt
+
+
 def normalize_team_code(value) -> str:
     if pd.isna(value):
         return np.nan
@@ -422,6 +438,7 @@ def load_pricelist(file) -> pd.DataFrame:
 # =========================================================
 
 
+
 def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
     raw = xls.parse(sheet_name=sheet_name, header=None).copy()
 
@@ -435,10 +452,14 @@ def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
             if end_coming_idx >= coming_idx:
                 raw = raw.drop(index=range(coming_idx, end_coming_idx + 1)).reset_index(drop=True)
 
+    # Struktur pricelist:
+    # - Row 2: header utama
+    # - Row 3: kode gudang utama (mis. RIF, OA)
+    # - Row 4: sub-kode gudang (mis. 1A, 2A)
     row1 = raw.iloc[1].tolist()
     row2 = _ffill_header(raw.iloc[2].tolist())
-    row3 = _ffill_header(raw.iloc[3].tolist())
-    row4 = _ffill_header(raw.iloc[4].tolist()) if len(raw) > 4 else [None] * len(row1)
+    row3 = _ffill_header(raw.iloc[2].tolist())
+    row4 = _ffill_header(raw.iloc[3].tolist()) if len(raw) > 3 else [None] * len(row1)
 
     columns = []
     warehouse_meta = []
@@ -450,20 +471,26 @@ def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
 
         if v1 is not None:
             columns.append(v1)
-            warehouse_meta.append((None, None, None))
-        elif group is not None and wh is not None:
-            combined = normalize_combined_warehouse_code(group, wh)
-            columns.append(f"{combined}__{i}")
-            warehouse_meta.append((group, wh, combined))
-        elif group is not None:
-            combined = normalize_combined_warehouse_code(group)
-            columns.append(f"{combined}__{i}")
-            warehouse_meta.append((group, None, combined))
+            warehouse_meta.append((None, None, None, None))
+            continue
+
+        group_clean = _norm_header_cell(group)
+        wh_clean = _norm_header_cell(wh).replace(" ", "")
+
+        combined_key = normalize_team_lookup_key(f"{group_clean} {wh_clean}") if group_clean and wh_clean else ""
+        combined_label = f"{group_clean} {wh_clean}".strip() if group_clean and wh_clean else (group_clean or "")
+
+        if combined_key:
+            columns.append(f"{combined_key}__{i}")
+            warehouse_meta.append((group_clean, wh_clean, combined_label, combined_key))
+        elif group_clean:
+            columns.append(f"{group_clean}__{i}")
+            warehouse_meta.append((group_clean, None, group_clean, normalize_team_lookup_key(group_clean)))
         else:
             columns.append(f"COL_{i}")
-            warehouse_meta.append((None, None, None))
+            warehouse_meta.append((None, None, None, None))
 
-    df = raw.iloc[5:].copy().reset_index(drop=True)
+    df = raw.iloc[4:].copy().reset_index(drop=True)
     df.columns = columns
 
     for c in ["SKU NO", "PRODUCT", "KODEBARANG", "SPESIFIKASI", "M3"]:
@@ -484,19 +511,18 @@ def parse_pricelist_sheet_with_warehouses(xls: pd.ExcelFile, sheet_name: str):
     jkt_stock_cols = []
 
     for i, col in enumerate(columns):
-        group, wh, combined = warehouse_meta[i]
+        group, wh, combined_label, combined_key = warehouse_meta[i]
         if group is None:
             continue
 
-        group_clean = normalize_combined_warehouse_code(group)
-        combined_clean = normalize_combined_warehouse_code(combined)
+        group_key = normalize_team_lookup_key(group)
 
-        if group_clean == "DEFAULT":
+        if group_key == "DEFAULT":
             default_stock_cols.append(col)
-        if group_clean == "JKT":
+        if group_key == "JKT":
             jkt_stock_cols.append(col)
-        if combined_clean:
-            warehouse_stock_cols.setdefault(combined_clean, []).append(col)
+        if combined_key:
+            warehouse_stock_cols.setdefault(combined_key, []).append(col)
 
     if "BRAND" not in df.columns:
         df["BRAND"] = np.nan
@@ -543,36 +569,61 @@ def load_pricelist_with_warehouses(file):
 # =========================================================
 # SALES PIVOT
 # =========================================================
+
 def load_sales_pivot(file) -> pd.DataFrame:
     raw = pd.read_excel(file, header=1).copy()
+    raw = raw.iloc[2:].copy().reset_index(drop=True)
     raw.columns = [str(c).strip().upper() for c in raw.columns]
     raw = raw.loc[:, ~pd.Index(raw.columns).duplicated()].copy()
 
     team_col = next((c for c in raw.columns if c == "TEAM" or "TEAM" in c), None)
     kode_barang_col = next((c for c in raw.columns if "KODE BARANG" in c or "KODEBARANG" in c), None)
+    spesifikasi_col = next((c for c in raw.columns if "SPESIFIKASI" in c), None)
     qty_col = next((c for c in raw.columns if c == "QTY" or "QTY" in c or "PCS" in c or "TERJUAL" in c), None)
-    tgl_col = next((c for c in raw.columns if c == "TGL" or "TGL" in c), None)
+    tgl_col = next((c for c in raw.columns if c == "TGL" or "TGL" in c or "DATE" in c), None)
 
-    if team_col is None or kode_barang_col is None or qty_col is None or tgl_col is None:
+    required = {"TEAM": team_col, "KODE BARANG": kode_barang_col, "QTY": qty_col, "TGL": tgl_col}
+    missing = [label for label, col in required.items() if col is None]
+    if missing:
         raise ValueError(
-            f"Format SALES PIVOT tidak cocok. Kolom terbaca: {list(raw.columns)}. "
-            "Pastikan header row 2 berisi TEAM, KODE BARANG, QTY, dan TGL."
+            f"Format SALES PIVOT tidak cocok. Kolom wajib tidak ditemukan: {missing}. "
+            f"Kolom yang terbaca: {list(raw.columns)}. "
+            "Pastikan header ada di row 2 dan data mulai row 4."
         )
 
-    df = raw[[team_col, kode_barang_col, qty_col, tgl_col]].copy()
-    df.columns = ["TEAM", "KODE BARANG", "QTY", "TGL"]
-    df["TEAM"] = df["TEAM"].apply(normalize_team_code)
+    use_cols = [team_col, kode_barang_col, qty_col, tgl_col]
+    if spesifikasi_col is not None:
+        use_cols.append(spesifikasi_col)
+
+    df = raw[use_cols].copy()
+    rename_map = {
+        team_col: "TEAM_RAW",
+        kode_barang_col: "KODE BARANG",
+        qty_col: "QTY",
+        tgl_col: "TGL",
+    }
+    if spesifikasi_col is not None:
+        rename_map[spesifikasi_col] = "SPESIFIKASI"
+    df = df.rename(columns=rename_map)
+
+    if "SPESIFIKASI" not in df.columns:
+        df["SPESIFIKASI"] = np.nan
+
+    df["TEAM"] = df["TEAM_RAW"].apply(normalize_display_team_code)
+    df["TEAM_KEY"] = df["TEAM_RAW"].apply(normalize_team_code)
     df["KODE BARANG"] = normalize_text(df["KODE BARANG"])
+    df["SPESIFIKASI"] = normalize_text(df["SPESIFIKASI"])
     df["QTY"] = to_num(df["QTY"]).fillna(0)
     df["TGL"] = ensure_datetime(df["TGL"])
 
     df = df[df["TEAM"].notna()].copy()
+    df = df[df["TEAM_KEY"].notna()].copy()
     df = df[df["KODE BARANG"].notna()].copy()
     df = df[df["QTY"] > 0].copy()
     df = df[df["TGL"].notna()].copy()
 
     if df.empty:
-        return pd.DataFrame(columns=["TEAM", "KODE BARANG", "QTY", "TGL", "PERIOD"])
+        return pd.DataFrame(columns=["TEAM", "TEAM_KEY", "KODE BARANG", "SPESIFIKASI", "QTY", "TGL", "PERIOD"])
 
     max_date = df["TGL"].max().normalize()
 
@@ -583,18 +634,19 @@ def load_sales_pivot(file) -> pd.DataFrame:
         if tmp.empty:
             continue
         agg = (
-            tmp.groupby(["TEAM", "KODE BARANG"], as_index=False)["QTY"]
-            .sum()
+            tmp.groupby(["TEAM", "TEAM_KEY", "KODE BARANG"], as_index=False)
+            .agg({"SPESIFIKASI": "first", "QTY": "sum"})
         )
         agg["PERIOD"] = label
         period_frames.append(agg)
 
     if not period_frames:
-        return pd.DataFrame(columns=["TEAM", "KODE BARANG", "QTY", "PERIOD"])
+        return pd.DataFrame(columns=["TEAM", "TEAM_KEY", "KODE BARANG", "SPESIFIKASI", "QTY", "PERIOD"])
 
     return pd.concat(period_frames, ignore_index=True).sort_values(
         ["PERIOD", "QTY", "TEAM", "KODE BARANG"], ascending=[True, False, True, True]
     ).reset_index(drop=True)
+
 
 
 
@@ -616,8 +668,8 @@ def build_sales_pivot_alerts(
         return pd.DataFrame(columns=empty_cols)
 
     base = (
-        base.groupby(["TEAM", "KODE BARANG"], as_index=False)["QTY"]
-        .sum()
+        base.groupby(["TEAM", "TEAM_KEY", "KODE BARANG"], as_index=False)
+        .agg({"SPESIFIKASI": "first", "QTY": "sum"})
     )
 
     pl = pricelist_wh.copy()
@@ -635,10 +687,10 @@ def build_sales_pivot_alerts(
 
     allowed_ready_suffixes = {"1A", "3A", "3B", "3C", "4A", "4B"}
 
-    def get_stock_cols_by_team(team_code):
-        if pd.isna(team_code):
+    def get_stock_cols_by_team(team_key):
+        if pd.isna(team_key):
             return []
-        lookup_key = normalize_team_lookup_key(team_code)
+        lookup_key = normalize_team_lookup_key(team_key)
 
         exact_cols = warehouse_stock_cols.get(lookup_key, [])
         if isinstance(exact_cols, str):
@@ -662,11 +714,11 @@ def build_sales_pivot_alerts(
     team_keys = sorted([str(k).strip().upper() for k in warehouse_stock_cols.keys() if str(k).strip().upper() != "DEFAULT"])
 
     def get_current_stock(row):
-        cols = get_stock_cols_by_team(row.get("TEAM"))
+        cols = get_stock_cols_by_team(row.get("TEAM_KEY"))
         return sum_stock_from_cols(row, cols)
 
     def get_ready_warehouses(row):
-        current_team_key = normalize_team_lookup_key(row.get("TEAM"))
+        current_team_key = normalize_team_lookup_key(row.get("TEAM_KEY"))
         ready_list = []
 
         for team_code in team_keys:
@@ -689,7 +741,7 @@ def build_sales_pivot_alerts(
         ready_list = sorted(ready_list, key=lambda x: x[0])
         return ", ".join([f"{code} {qty}" for code, qty in ready_list])
 
-    merged["SPESIFIKASI"] = merged.get("SPESIFIKASI", "").fillna("")
+    merged["SPESIFIKASI"] = merged["SPESIFIKASI_x"].fillna(merged.get("SPESIFIKASI_y", ""))
     merged["STOK"] = merged.apply(get_current_stock, axis=1)
     merged["GUDANG READY"] = merged.apply(get_ready_warehouses, axis=1)
     merged["KET"] = np.where(
@@ -709,12 +761,11 @@ def build_sales_pivot_alerts(
         return pd.DataFrame(columns=empty_cols)
 
     work_df["KEBUTUHAN_STOK"] = to_num(work_df["QTY"]).fillna(0) - to_num(work_df["STOK"]).fillna(0)
-    out = work_df[["TEAM", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY", "KEBUTUHAN_STOK"]].copy()
+    out = work_df[["TEAM", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY"]].copy()
     out["QTY"] = pd.to_numeric(out["QTY"], errors="coerce").fillna(0).round(0).astype(int)
     out["STOK"] = pd.to_numeric(out["STOK"], errors="coerce").fillna(0).round(0).astype(int)
     out = out.sort_values(["KEBUTUHAN_STOK", "QTY", "TEAM", "KODE BARANG"], ascending=[False, False, True, True]).reset_index(drop=True)
-    return out[["TEAM", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY"]]
-
+    return out
 def render_sales_pivot_alert_table(df: pd.DataFrame):
     if df.empty:
         st.info("Analisa Stok belum menemukan data.")
