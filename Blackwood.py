@@ -1158,14 +1158,6 @@ with left:
 with right:
     render_left_table(build_brand_table(filtered, selected_period, comparison_division), f"Segmentasi Brand - {selected_period}", selected_division=comparison_division)
 
-sales_pivot_alerts = build_sales_pivot_alerts(
-    sales_pivot,
-    pricelist_wh,
-    warehouse_stock_cols,
-    period=stok_period,
-    selected_products=stok_products,
-)
-
 st.markdown("### Tabel Utama Analisa")
 main_table_export = build_main_table_filtered(
     filtered,
@@ -1176,7 +1168,6 @@ main_table_export = build_main_table_filtered(
     selected_products=selected_products,
 )
 main_table_export = render_main_table_dynamic(main_table_export, comparison_division)
-
 
 st.markdown("### Filter Analisa Stok")
 
@@ -1196,6 +1187,13 @@ with col2:
         index=0
     )
 
+sales_pivot_alerts = build_sales_pivot_alerts(
+    sales_pivot,
+    pricelist_wh,
+    warehouse_stock_cols,
+    period=stok_period,
+    selected_products=stok_products,
+)
 
 st.markdown("### Analisa Stok")
 render_sales_pivot_alert_table(sales_pivot_alerts)
