@@ -1298,7 +1298,7 @@ with st.container(border=True):
         col5 = st.columns(1)[0]
         with col5:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            process_stok = st.form_submit_button("PROSES", use_container_width=True)
+            process_stok = st.form_submit_button("PROSES")
 
     if process_stok:
         new_period_start, new_period_end = get_period_date_range(sales_pivot, stok_period)
