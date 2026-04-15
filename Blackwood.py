@@ -66,18 +66,6 @@ st.markdown(
         padding: 10px;
         margin-bottom: 14px;
     }
-    .section-card {
-        border: 1px solid #d9d9d9;
-        border-radius: 12px;
-        background: #fff;
-        padding: 14px;
-        margin-bottom: 16px;
-    }
-    .section-title {
-        font-weight: 700;
-        font-size: 18px;
-        margin-bottom: 12px;
-    }
     .alert-wrap {
         border: 1px solid #d9d9d9;
         border-radius: 8px;
@@ -704,7 +692,7 @@ def build_sales_pivot_alerts(
     if selected_segments:
         merged = merged[merged["PRICE_SEGMENT"].isin(selected_segments)]
 
-    allowed_ready_suffixes = {"1A", "3A", "3B", "3C", "4A", "4B"}
+    allowed_ready_team_keys = {"JKT1A", "JKT3A", "JKT3B", "JKT3C", "JKT4A", "JKT4B"}
 
     def get_stock_cols_by_team(team_key):
         if pd.isna(team_key):
@@ -745,9 +733,7 @@ def build_sales_pivot_alerts(
             if team_key == current_team_key:
                 continue
 
-            suffix = re.search(r"(1A|3A|3B|3C|4A|4B)$", team_key)
-            suffix = suffix.group(1) if suffix else ""
-            if suffix not in allowed_ready_suffixes:
+            if team_key not in allowed_ready_team_keys:
                 continue
 
             cols = warehouse_stock_cols.get(team_code, [])
@@ -755,10 +741,10 @@ def build_sales_pivot_alerts(
             cols = [c for c in cols if c in merged.columns]
             total_stock = sum_stock_from_cols(row, cols)
             if total_stock > 0:
-                ready_list.append((team_key, int(round(total_stock))))
+                ready_list.append(team_key)
 
-        ready_list = sorted(ready_list, key=lambda x: x[0])
-        return ", ".join([f"{code} {qty}" for code, qty in ready_list])
+        ready_list = sorted(set(ready_list))
+        return ", ".join(ready_list)
 
     merged["SPESIFIKASI"] = merged["SPESIFIKASI_x"].fillna(merged.get("SPESIFIKASI_y", ""))
     merged["STOK"] = merged.apply(get_current_stock, axis=1)
@@ -1181,52 +1167,67 @@ if filtered.empty:
     st.warning("Data kosong setelah filter diterapkan.")
     st.stop()
 
-st.markdown('<div class="section-card"><div class="section-title">ANALISA BY SEGMENT</div>', unsafe_allow_html=True)
-left, right = st.columns(2)
-with left:
-    render_left_table(build_segment_table(filtered, selected_period, comparison_division), f"Segmentasi Harga - {selected_period}", selected_division=comparison_division, use_card=False)
-with right:
-    render_left_table(build_brand_table(filtered, selected_period, comparison_division), f"Segmentasi Brand - {selected_period}", selected_division=comparison_division, use_card=False)
-st.markdown('</div>', unsafe_allow_html=True)
+with st.container(border=True):
+    st.markdown("### ANALISA BY SEGMENT")
+    left, right = st.columns(2)
+    with left:
+        render_left_table(build_segment_table(filtered, selected_period, comparison_division), f"Segmentasi Harga - {selected_period}", selected_division=comparison_division, use_card=False)
+    with right:
+        render_left_table(build_brand_table(filtered, selected_period, comparison_division), f"Segmentasi Brand - {selected_period}", selected_division=comparison_division, use_card=False)
 
-st.markdown('<div class="section-card"><div class="section-title">ANALISA BY SKU</div>', unsafe_allow_html=True)
-main_table_export = build_main_table_filtered(
-    filtered,
-    selected_period,
-    comparison_division,
-    selected_segments=selected_segments,
-    selected_brands=selected_brands,
-    selected_products=selected_products,
-)
-main_table_export = render_main_table_dynamic(main_table_export, comparison_division)
-st.markdown('</div>', unsafe_allow_html=True)
+with st.container(border=True):
+    st.markdown("### ANALISA BY SKU")
+    main_table_export = build_main_table_filtered(
+        filtered,
+        selected_period,
+        comparison_division,
+        selected_segments=selected_segments,
+        selected_brands=selected_brands,
+        selected_products=selected_products,
+    )
+    main_table_export = render_main_table_dynamic(main_table_export, comparison_division)
 
-st.markdown('<div class="section-card"><div class="section-title">ANALISA BY STOK</div>', unsafe_allow_html=True)
-col1, col2 = st.columns(2)
+if "stok_products" not in st.session_state:
+    st.session_state["stok_products"] = selected_products
+if "stok_period" not in st.session_state:
+    st.session_state["stok_period"] = selected_period if selected_period in PERIODS else PERIODS[0]
 
-with col1:
-    stok_products = st.multiselect(
-        "Product",
-        sorted(pricelist_wh["PRODUCT"].dropna().unique()),
-        default=selected_products
+with st.container(border=True):
+    st.markdown("### ANALISA BY STOK")
+    with st.form("stok_filter_form"):
+        col1, col2, col3 = st.columns([1.4, 1.0, 0.6])
+
+        with col1:
+            stok_products = st.multiselect(
+                "Product",
+                sorted(pricelist_wh["PRODUCT"].dropna().unique()),
+                default=st.session_state.get("stok_products", selected_products),
+            )
+
+        with col2:
+            current_stok_period = st.session_state.get("stok_period", selected_period if selected_period in PERIODS else PERIODS[0])
+            stok_period = st.selectbox(
+                "Period",
+                PERIODS,
+                index=PERIODS.index(current_stok_period) if current_stok_period in PERIODS else 0,
+            )
+
+        with col3:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            process_stok = st.form_submit_button("PROSES", use_container_width=True)
+
+    if process_stok:
+        st.session_state["stok_products"] = stok_products
+        st.session_state["stok_period"] = stok_period
+
+    sales_pivot_alerts = build_sales_pivot_alerts(
+        sales_pivot,
+        pricelist_wh,
+        warehouse_stock_cols,
+        period=st.session_state["stok_period"],
+        selected_products=st.session_state["stok_products"],
     )
 
-with col2:
-    stok_period = st.selectbox(
-        "Period",
-        PERIODS,
-        index=PERIODS.index(selected_period) if selected_period in PERIODS else 0
-    )
-
-sales_pivot_alerts = build_sales_pivot_alerts(
-    sales_pivot,
-    pricelist_wh,
-    warehouse_stock_cols,
-    period=stok_period,
-    selected_products=stok_products,
-)
-
-render_sales_pivot_alert_table(sales_pivot_alerts)
-st.markdown('</div>', unsafe_allow_html=True)
+    render_sales_pivot_alert_table(sales_pivot_alerts)
 
 st.markdown("<div style='height:120px;'></div>", unsafe_allow_html=True)
