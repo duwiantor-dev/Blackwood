@@ -1295,22 +1295,8 @@ with st.container(border=True):
                 default=st.session_state.get("stok_teams", []),
             )
 
-        col5, col6, col7 = st.columns([1, 1, 0.8])
+        col5 = st.columns(1)[0]
         with col5:
-            stok_start_date = st.date_input(
-                "Tanggal Awal",
-                value=st.session_state.get("stok_start_date"),
-                min_value=stok_min_date_value,
-                max_value=stok_max_date_value,
-            )
-        with col6:
-            stok_end_date = st.date_input(
-                "Tanggal Akhir",
-                value=st.session_state.get("stok_end_date"),
-                min_value=stok_min_date_value,
-                max_value=stok_max_date_value,
-            )
-        with col7:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             process_stok = st.form_submit_button("PROSES", use_container_width=True)
 
@@ -1347,8 +1333,7 @@ with st.container(border=True):
         selected_products=st.session_state["stok_products"],
         selected_kode_barang=st.session_state.get("stok_kode_barang", []),
         selected_teams=st.session_state.get("stok_teams", []),
-        start_date=st.session_state.get("stok_start_date"),
-        end_date=st.session_state.get("stok_end_date"),
+        
     )
 
     render_sales_pivot_alert_table(sales_pivot_alerts)
