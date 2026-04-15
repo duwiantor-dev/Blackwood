@@ -761,11 +761,12 @@ def build_sales_pivot_alerts(
         return pd.DataFrame(columns=empty_cols)
 
     work_df["KEBUTUHAN_STOK"] = to_num(work_df["QTY"]).fillna(0) - to_num(work_df["STOK"]).fillna(0)
-    out = work_df[["TEAM", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY"]].copy()
+    out = work_df[["TEAM", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY", "KEBUTUHAN_STOK"]].copy()
     out["QTY"] = pd.to_numeric(out["QTY"], errors="coerce").fillna(0).round(0).astype(int)
     out["STOK"] = pd.to_numeric(out["STOK"], errors="coerce").fillna(0).round(0).astype(int)
+    out["KEBUTUHAN_STOK"] = pd.to_numeric(out["KEBUTUHAN_STOK"], errors="coerce").fillna(0)
     out = out.sort_values(["KEBUTUHAN_STOK", "QTY", "TEAM", "KODE BARANG"], ascending=[False, False, True, True]).reset_index(drop=True)
-    return out
+    return out[["TEAM", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY"]]
 def render_sales_pivot_alert_table(df: pd.DataFrame):
     if df.empty:
         st.info("Analisa Stok belum menemukan data.")
