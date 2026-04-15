@@ -1134,7 +1134,7 @@ with st.form("unified_filter_form"):
     with fcol4:
         selected_segments = st.multiselect("Range Harga", [s[2] for s in PRICE_SEGMENTS] + ["UNKNOWN"])
     with fcol5:
-        comparison_division = st.selectbox("Perbandingan", ["03 OLP", "04 MOD", "05 OLR"], index=1)
+        comparison_division = st.selectbox("Perbandingan", ["03 OLP", "04 MOD", "05 OLR"], index=0)
     with fcol6:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
         apply_filter = st.form_submit_button("PROSES", use_container_width=True)
@@ -1162,10 +1162,8 @@ sales_pivot_alerts = build_sales_pivot_alerts(
     sales_pivot,
     pricelist_wh,
     warehouse_stock_cols,
-    period=selected_period,
-    selected_products=selected_products,
-    selected_brands=selected_brands,
-    selected_segments=selected_segments,
+    period=stok_period,
+    selected_products=stok_products,
 )
 
 st.markdown("### Tabel Utama Analisa")
@@ -1178,6 +1176,26 @@ main_table_export = build_main_table_filtered(
     selected_products=selected_products,
 )
 main_table_export = render_main_table_dynamic(main_table_export, comparison_division)
+
+
+st.markdown("### Filter Analisa Stok")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    stok_products = st.multiselect(
+        "Product (Stok)",
+        sorted(pricelist_wh["PRODUCT"].dropna().unique()),
+        default=selected_products
+    )
+
+with col2:
+    stok_period = st.selectbox(
+        "Period (Stok)",
+        PERIODS,
+        index=0
+    )
+
 
 st.markdown("### Analisa Stok")
 render_sales_pivot_alert_table(sales_pivot_alerts)
