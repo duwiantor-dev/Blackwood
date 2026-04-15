@@ -614,7 +614,7 @@ def load_sales_pivot(file) -> pd.DataFrame:
     df["KODE BARANG"] = normalize_text(df["KODE BARANG"])
     df["SPESIFIKASI"] = normalize_text(df["SPESIFIKASI"])
     df["QTY"] = to_num(df["QTY"]).fillna(0)
-    df["TGL"] = ensure_datetime(df["TGL"])
+    df["TGL"] = ensure_datetime(df["TGL"]).dt.normalize()
 
     df = df[df["TEAM"].notna()].copy()
     df = df[df["TEAM_KEY"].notna()].copy()
@@ -623,28 +623,11 @@ def load_sales_pivot(file) -> pd.DataFrame:
     df = df[df["TGL"].notna()].copy()
 
     if df.empty:
-        return pd.DataFrame(columns=["TEAM", "TEAM_KEY", "KODE BARANG", "SPESIFIKASI", "QTY", "TGL", "PERIOD"])
+        return pd.DataFrame(columns=["TEAM", "TEAM_KEY", "KODE BARANG", "SPESIFIKASI", "QTY", "TGL"])
 
-    max_date = df["TGL"].max().normalize()
-
-    period_frames = []
-    for days, label in [(7, "7DAY"), (14, "14DAY"), (30, "30DAY")]:
-        start_date = max_date - pd.Timedelta(days=days - 1)
-        tmp = df[df["TGL"].dt.normalize() >= start_date].copy()
-        if tmp.empty:
-            continue
-        tmp_period = tmp[["TEAM", "TEAM_KEY", "KODE BARANG", "SPESIFIKASI", "QTY", "TGL"]].copy()
-        tmp_period["PERIOD"] = label
-        period_frames.append(tmp_period)
-
-    if not period_frames:
-        return pd.DataFrame(columns=["TEAM", "TEAM_KEY", "KODE BARANG", "SPESIFIKASI", "QTY", "TGL", "PERIOD"])
-
-    return pd.concat(period_frames, ignore_index=True).sort_values(
-        ["PERIOD", "TGL", "QTY", "TEAM", "KODE BARANG"], ascending=[True, False, False, True, True]
+    return df[["TEAM", "TEAM_KEY", "KODE BARANG", "SPESIFIKASI", "QTY", "TGL"]].sort_values(
+        ["TGL", "TEAM", "KODE BARANG"], ascending=[False, True, True]
     ).reset_index(drop=True)
-
-
 
 
 def build_sales_pivot_alerts(
@@ -664,28 +647,40 @@ def build_sales_pivot_alerts(
     if sales_pivot.empty or pricelist_wh.empty:
         return pd.DataFrame(columns=empty_cols)
 
-    base = sales_pivot[sales_pivot["PERIOD"] == period].copy()
-    if base.empty:
-        return pd.DataFrame(columns=empty_cols)
+    base = sales_pivot.copy()
+
+    default_start_ts, default_end_ts = get_period_date_range(base, period)
+    start_ts = pd.to_datetime(start_date, errors="coerce") if start_date is not None else pd.NaT
+    end_ts = pd.to_datetime(end_date, errors="coerce") if end_date is not None else pd.NaT
+
+    if pd.isna(start_ts):
+        start_ts = default_start_ts
+    else:
+        start_ts = start_ts.normalize()
+
+    if pd.isna(end_ts):
+        end_ts = default_end_ts
+    else:
+        end_ts = end_ts.normalize()
+
+    if start_ts is not None and end_ts is not None and start_ts > end_ts:
+        start_ts, end_ts = end_ts, start_ts
+
+    if start_ts is not None:
+        base = base[base["TGL"] >= start_ts]
+    if end_ts is not None:
+        base = base[base["TGL"] <= end_ts]
 
     if selected_kode_barang:
         base = base[base["KODE BARANG"].isin(selected_kode_barang)]
     if selected_teams:
         base = base[base["TEAM"].isin(selected_teams)]
-    if start_date is not None:
-        start_ts = pd.to_datetime(start_date, errors="coerce")
-        if pd.notna(start_ts):
-            base = base[base["TGL"].dt.normalize() >= start_ts.normalize()]
-    if end_date is not None:
-        end_ts = pd.to_datetime(end_date, errors="coerce")
-        if pd.notna(end_ts):
-            base = base[base["TGL"].dt.normalize() <= end_ts.normalize()]
     if base.empty:
         return pd.DataFrame(columns=empty_cols)
 
     base = (
         base.groupby(["TEAM", "TEAM_KEY", "KODE BARANG"], as_index=False)
-        .agg({"SPESIFIKASI": "first", "QTY": "sum"})
+        .agg(SPESIFIKASI=("SPESIFIKASI", "first"), QTY=("QTY", "sum"))
     )
 
     pl = pricelist_wh.copy()
@@ -1203,6 +1198,13 @@ with st.container(border=True):
     )
     main_table_export = render_main_table_dynamic(main_table_export, comparison_division)
 
+stok_kode_barang_options = sorted(sales_pivot["KODE BARANG"].dropna().unique().tolist()) if not sales_pivot.empty and "KODE BARANG" in sales_pivot.columns else []
+stok_team_options = sorted(sales_pivot["TEAM"].dropna().unique().tolist()) if not sales_pivot.empty and "TEAM" in sales_pivot.columns else []
+stok_min_date = sales_pivot["TGL"].min() if not sales_pivot.empty and "TGL" in sales_pivot.columns else None
+stok_max_date = sales_pivot["TGL"].max() if not sales_pivot.empty and "TGL" in sales_pivot.columns else None
+stok_min_date_value = pd.to_datetime(stok_min_date, errors="coerce").date() if pd.notna(stok_min_date) else None
+stok_max_date_value = pd.to_datetime(stok_max_date, errors="coerce").date() if pd.notna(stok_max_date) else None
+
 if "stok_products" not in st.session_state:
     st.session_state["stok_products"] = selected_products
 if "stok_period" not in st.session_state:
@@ -1211,17 +1213,35 @@ if "stok_kode_barang" not in st.session_state:
     st.session_state["stok_kode_barang"] = []
 if "stok_teams" not in st.session_state:
     st.session_state["stok_teams"] = []
-if "stok_start_date" not in st.session_state:
-    stok_min_date = sales_pivot["TGL"].min() if not sales_pivot.empty and "TGL" in sales_pivot.columns else None
-    st.session_state["stok_start_date"] = stok_min_date.date() if pd.notna(stok_min_date) else None
-if "stok_end_date" not in st.session_state:
-    stok_max_date = sales_pivot["TGL"].max() if not sales_pivot.empty and "TGL" in sales_pivot.columns else None
-    st.session_state["stok_end_date"] = stok_max_date.date() if pd.notna(stok_max_date) else None
 
-stok_kode_barang_options = sorted(sales_pivot["KODE BARANG"].dropna().unique().tolist()) if not sales_pivot.empty and "KODE BARANG" in sales_pivot.columns else []
-stok_team_options = sorted(sales_pivot["TEAM"].dropna().unique().tolist()) if not sales_pivot.empty and "TEAM" in sales_pivot.columns else []
-stok_min_date = sales_pivot["TGL"].min() if not sales_pivot.empty and "TGL" in sales_pivot.columns else None
-stok_max_date = sales_pivot["TGL"].max() if not sales_pivot.empty and "TGL" in sales_pivot.columns else None
+period_default_start, period_default_end = get_period_date_range(sales_pivot, st.session_state["stok_period"])
+period_default_start_value = pd.to_datetime(period_default_start, errors="coerce").date() if pd.notna(period_default_start) else stok_min_date_value
+period_default_end_value = pd.to_datetime(period_default_end, errors="coerce").date() if pd.notna(period_default_end) else stok_max_date_value
+
+current_start = pd.to_datetime(st.session_state.get("stok_start_date"), errors="coerce")
+current_end = pd.to_datetime(st.session_state.get("stok_end_date"), errors="coerce")
+
+if pd.isna(current_start):
+    st.session_state["stok_start_date"] = period_default_start_value
+else:
+    current_start_value = current_start.date()
+    if stok_min_date_value is not None and (current_start_value < stok_min_date_value or current_start_value > stok_max_date_value):
+        st.session_state["stok_start_date"] = period_default_start_value
+
+if pd.isna(current_end):
+    st.session_state["stok_end_date"] = period_default_end_value
+else:
+    current_end_value = current_end.date()
+    if stok_min_date_value is not None and (current_end_value < stok_min_date_value or current_end_value > stok_max_date_value):
+        st.session_state["stok_end_date"] = period_default_end_value
+
+if (
+    st.session_state.get("stok_start_date") is not None
+    and st.session_state.get("stok_end_date") is not None
+    and st.session_state["stok_start_date"] > st.session_state["stok_end_date"]
+):
+    st.session_state["stok_start_date"] = period_default_start_value
+    st.session_state["stok_end_date"] = period_default_end_value
 
 with st.container(border=True):
     st.markdown("### ANALISA STOK")
@@ -1260,27 +1280,44 @@ with st.container(border=True):
             stok_start_date = st.date_input(
                 "Tanggal Awal",
                 value=st.session_state.get("stok_start_date"),
-                min_value=stok_min_date.date() if pd.notna(stok_min_date) else None,
-                max_value=stok_max_date.date() if pd.notna(stok_max_date) else None,
+                min_value=stok_min_date_value,
+                max_value=stok_max_date_value,
             )
         with col6:
             stok_end_date = st.date_input(
                 "Tanggal Akhir",
                 value=st.session_state.get("stok_end_date"),
-                min_value=stok_min_date.date() if pd.notna(stok_min_date) else None,
-                max_value=stok_max_date.date() if pd.notna(stok_max_date) else None,
+                min_value=stok_min_date_value,
+                max_value=stok_max_date_value,
             )
         with col7:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             process_stok = st.form_submit_button("PROSES", use_container_width=True)
 
     if process_stok:
+        new_period_start, new_period_end = get_period_date_range(sales_pivot, stok_period)
+        new_period_start_value = pd.to_datetime(new_period_start, errors="coerce").date() if pd.notna(new_period_start) else stok_min_date_value
+        new_period_end_value = pd.to_datetime(new_period_end, errors="coerce").date() if pd.notna(new_period_end) else stok_max_date_value
+
         st.session_state["stok_products"] = stok_products
         st.session_state["stok_period"] = stok_period
         st.session_state["stok_kode_barang"] = stok_kode_barang
         st.session_state["stok_teams"] = stok_teams
-        st.session_state["stok_start_date"] = stok_start_date
-        st.session_state["stok_end_date"] = stok_end_date
+
+        start_value = pd.to_datetime(stok_start_date, errors="coerce")
+        end_value = pd.to_datetime(stok_end_date, errors="coerce")
+        start_value = start_value.date() if pd.notna(start_value) else new_period_start_value
+        end_value = end_value.date() if pd.notna(end_value) else new_period_end_value
+
+        if stok_min_date_value is not None and (start_value < stok_min_date_value or start_value > stok_max_date_value):
+            start_value = new_period_start_value
+        if stok_min_date_value is not None and (end_value < stok_min_date_value or end_value > stok_max_date_value):
+            end_value = new_period_end_value
+        if start_value > end_value:
+            start_value, end_value = new_period_start_value, new_period_end_value
+
+        st.session_state["stok_start_date"] = start_value
+        st.session_state["stok_end_date"] = end_value
 
     sales_pivot_alerts = build_sales_pivot_alerts(
         sales_pivot,
