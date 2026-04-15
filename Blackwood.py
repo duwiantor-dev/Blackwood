@@ -741,10 +741,10 @@ def build_sales_pivot_alerts(
             cols = [c for c in cols if c in merged.columns]
             total_stock = sum_stock_from_cols(row, cols)
             if total_stock > 0:
-                ready_list.append(team_key)
+                ready_list.append((team_key, int(round(total_stock))))
 
-        ready_list = sorted(set(ready_list))
-        return ", ".join(ready_list)
+        ready_list = sorted(ready_list, key=lambda x: x[0])
+        return ", ".join([f"{team} ({qty})" for team, qty in ready_list])
 
     merged["SPESIFIKASI"] = merged["SPESIFIKASI_x"].fillna(merged.get("SPESIFIKASI_y", ""))
     merged["STOK"] = merged.apply(get_current_stock, axis=1)
