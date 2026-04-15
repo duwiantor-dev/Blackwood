@@ -66,6 +66,18 @@ st.markdown(
         padding: 10px;
         margin-bottom: 14px;
     }
+    .section-card {
+        border: 1px solid #d9d9d9;
+        border-radius: 12px;
+        background: #fff;
+        padding: 14px;
+        margin-bottom: 16px;
+    }
+    .section-title {
+        font-weight: 700;
+        font-size: 18px;
+        margin-bottom: 12px;
+    }
     .alert-wrap {
         border: 1px solid #d9d9d9;
         border-radius: 8px;
@@ -685,6 +697,13 @@ def build_sales_pivot_alerts(
 
     merged = base.merge(pl, how="left", left_on="KODE BARANG", right_on="KODEBARANG")
 
+    if selected_products:
+        merged = merged[merged["PRODUCT"].isin(selected_products)]
+    if selected_brands:
+        merged = merged[merged["BRAND"].isin(selected_brands)]
+    if selected_segments:
+        merged = merged[merged["PRICE_SEGMENT"].isin(selected_segments)]
+
     allowed_ready_suffixes = {"1A", "3A", "3B", "3C", "4A", "4B"}
 
     def get_stock_cols_by_team(team_key):
@@ -843,7 +862,7 @@ def build_brand_table(df, period, comparison_division_label="03 OLP"):
     brand["DELTA"] = to_num(brand["05 OLR"]).fillna(0) - to_num(brand[compare_col]).fillna(0)
     return brand
 
-def render_left_table(df, title, selected_division="05 OLR"):
+def render_left_table(df, title, selected_division="05 OLR", use_card=True):
     def is_number(v):
         return isinstance(v, (int, float, np.integer, np.floating)) and not pd.isna(v)
 
@@ -851,12 +870,19 @@ def render_left_table(df, title, selected_division="05 OLR"):
         return f"{int(round(float(v))):,}".replace(",", ".")
 
     html = []
-    html.append("""
-    <div class="table-card">
-      <div style="font-weight:700;font-size:16px;margin-bottom:8px;">""" + title + """</div>
-      <div style="overflow-x:auto;">
-        <table style="border-collapse:collapse;width:100%;font-size:12px;">
-    """)
+    if use_card:
+        html.append("""
+        <div class="table-card">
+          <div style="font-weight:700;font-size:16px;margin-bottom:8px;">""" + title + """</div>
+          <div style="overflow-x:auto;">
+            <table style="border-collapse:collapse;width:100%;font-size:12px;">
+        """)
+    else:
+        html.append("""
+          <div style="font-weight:700;font-size:16px;margin-bottom:8px;">""" + title + """</div>
+          <div style="overflow-x:auto;">
+            <table style="border-collapse:collapse;width:100%;font-size:12px;">
+        """)
     html.append("<thead><tr>")
     for col in df.columns:
         html.append(f'<th style="border:1px solid #2b2b2b;background:#f3f4f6;padding:6px;text-align:left;">{col}</th>')
@@ -896,7 +922,10 @@ def render_left_table(df, title, selected_division="05 OLR"):
             html.append(f'<td style="{style}">{display}</td>')
         html.append("</tr>")
 
-    html.append("</tbody></table></div></div>")
+    if use_card:
+        html.append("</tbody></table></div></div>")
+    else:
+        html.append("</tbody></table></div>")
     st.markdown("".join(html), unsafe_allow_html=True)
 
 def build_main_table_filtered(
@@ -1152,13 +1181,15 @@ if filtered.empty:
     st.warning("Data kosong setelah filter diterapkan.")
     st.stop()
 
+st.markdown('<div class="section-card"><div class="section-title">ANALISA BY SEGMENT</div>', unsafe_allow_html=True)
 left, right = st.columns(2)
 with left:
-    render_left_table(build_segment_table(filtered, selected_period, comparison_division), f"Segmentasi Harga - {selected_period}", selected_division=comparison_division)
+    render_left_table(build_segment_table(filtered, selected_period, comparison_division), f"Segmentasi Harga - {selected_period}", selected_division=comparison_division, use_card=False)
 with right:
-    render_left_table(build_brand_table(filtered, selected_period, comparison_division), f"Segmentasi Brand - {selected_period}", selected_division=comparison_division)
+    render_left_table(build_brand_table(filtered, selected_period, comparison_division), f"Segmentasi Brand - {selected_period}", selected_division=comparison_division, use_card=False)
+st.markdown('</div>', unsafe_allow_html=True)
 
-st.markdown("### Tabel Utama Analisa")
+st.markdown('<div class="section-card"><div class="section-title">ANALISA BY SKU</div>', unsafe_allow_html=True)
 main_table_export = build_main_table_filtered(
     filtered,
     selected_period,
@@ -1168,23 +1199,23 @@ main_table_export = build_main_table_filtered(
     selected_products=selected_products,
 )
 main_table_export = render_main_table_dynamic(main_table_export, comparison_division)
+st.markdown('</div>', unsafe_allow_html=True)
 
-st.markdown("### Filter Analisa Stok")
-
+st.markdown('<div class="section-card"><div class="section-title">ANALISA BY STOK</div>', unsafe_allow_html=True)
 col1, col2 = st.columns(2)
 
 with col1:
     stok_products = st.multiselect(
-        "Product (Stok)",
+        "Product",
         sorted(pricelist_wh["PRODUCT"].dropna().unique()),
         default=selected_products
     )
 
 with col2:
     stok_period = st.selectbox(
-        "Period (Stok)",
+        "Period",
         PERIODS,
-        index=0
+        index=PERIODS.index(selected_period) if selected_period in PERIODS else 0
     )
 
 sales_pivot_alerts = build_sales_pivot_alerts(
@@ -1195,7 +1226,7 @@ sales_pivot_alerts = build_sales_pivot_alerts(
     selected_products=stok_products,
 )
 
-st.markdown("### Analisa Stok")
 render_sales_pivot_alert_table(sales_pivot_alerts)
+st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown("<div style='height:120px;'></div>", unsafe_allow_html=True)
