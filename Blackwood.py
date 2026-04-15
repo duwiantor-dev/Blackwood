@@ -1207,19 +1207,32 @@ if "stok_products" not in st.session_state:
     st.session_state["stok_products"] = selected_products
 if "stok_period" not in st.session_state:
     st.session_state["stok_period"] = selected_period if selected_period in PERIODS else PERIODS[0]
+if "stok_kode_barang" not in st.session_state:
+    st.session_state["stok_kode_barang"] = []
+if "stok_teams" not in st.session_state:
+    st.session_state["stok_teams"] = []
+if "stok_start_date" not in st.session_state:
+    stok_min_date = sales_pivot["TGL"].min() if not sales_pivot.empty and "TGL" in sales_pivot.columns else None
+    st.session_state["stok_start_date"] = stok_min_date.date() if pd.notna(stok_min_date) else None
+if "stok_end_date" not in st.session_state:
+    stok_max_date = sales_pivot["TGL"].max() if not sales_pivot.empty and "TGL" in sales_pivot.columns else None
+    st.session_state["stok_end_date"] = stok_max_date.date() if pd.notna(stok_max_date) else None
+
+stok_kode_barang_options = sorted(sales_pivot["KODE BARANG"].dropna().unique().tolist()) if not sales_pivot.empty and "KODE BARANG" in sales_pivot.columns else []
+stok_team_options = sorted(sales_pivot["TEAM"].dropna().unique().tolist()) if not sales_pivot.empty and "TEAM" in sales_pivot.columns else []
+stok_min_date = sales_pivot["TGL"].min() if not sales_pivot.empty and "TGL" in sales_pivot.columns else None
+stok_max_date = sales_pivot["TGL"].max() if not sales_pivot.empty and "TGL" in sales_pivot.columns else None
 
 with st.container(border=True):
     st.markdown("### ANALISA STOK")
     with st.form("stok_filter_form"):
-        col1, col2, col3 = st.columns([1.4, 1.0, 0.6])
-
+        col1, col2 = st.columns(2)
         with col1:
             stok_products = st.multiselect(
                 "Product",
                 sorted(pricelist_wh["PRODUCT"].dropna().unique()),
                 default=st.session_state.get("stok_products", selected_products),
             )
-
         with col2:
             current_stok_period = st.session_state.get("stok_period", selected_period if selected_period in PERIODS else PERIODS[0])
             stok_period = st.selectbox(
@@ -1228,13 +1241,46 @@ with st.container(border=True):
                 index=PERIODS.index(current_stok_period) if current_stok_period in PERIODS else 0,
             )
 
+        col3, col4 = st.columns(2)
         with col3:
+            stok_kode_barang = st.multiselect(
+                "Kode Barang",
+                stok_kode_barang_options,
+                default=st.session_state.get("stok_kode_barang", []),
+            )
+        with col4:
+            stok_teams = st.multiselect(
+                "Team",
+                stok_team_options,
+                default=st.session_state.get("stok_teams", []),
+            )
+
+        col5, col6, col7 = st.columns([1, 1, 0.8])
+        with col5:
+            stok_start_date = st.date_input(
+                "Tanggal Awal",
+                value=st.session_state.get("stok_start_date"),
+                min_value=stok_min_date.date() if pd.notna(stok_min_date) else None,
+                max_value=stok_max_date.date() if pd.notna(stok_max_date) else None,
+            )
+        with col6:
+            stok_end_date = st.date_input(
+                "Tanggal Akhir",
+                value=st.session_state.get("stok_end_date"),
+                min_value=stok_min_date.date() if pd.notna(stok_min_date) else None,
+                max_value=stok_max_date.date() if pd.notna(stok_max_date) else None,
+            )
+        with col7:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             process_stok = st.form_submit_button("PROSES", use_container_width=True)
 
     if process_stok:
         st.session_state["stok_products"] = stok_products
         st.session_state["stok_period"] = stok_period
+        st.session_state["stok_kode_barang"] = stok_kode_barang
+        st.session_state["stok_teams"] = stok_teams
+        st.session_state["stok_start_date"] = stok_start_date
+        st.session_state["stok_end_date"] = stok_end_date
 
     sales_pivot_alerts = build_sales_pivot_alerts(
         sales_pivot,
@@ -1242,6 +1288,10 @@ with st.container(border=True):
         warehouse_stock_cols,
         period=st.session_state["stok_period"],
         selected_products=st.session_state["stok_products"],
+        selected_kode_barang=st.session_state.get("stok_kode_barang", []),
+        selected_teams=st.session_state.get("stok_teams", []),
+        start_date=st.session_state.get("stok_start_date"),
+        end_date=st.session_state.get("stok_end_date"),
     )
 
     render_sales_pivot_alert_table(sales_pivot_alerts)
