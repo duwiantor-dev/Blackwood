@@ -787,16 +787,23 @@ def build_sales_pivot_alerts(
         )
     )
 
-    work_df = merged[merged["KET"] != ""].copy()
-    if work_df.empty:
-        return pd.DataFrame(columns=empty_cols)
+    merged["KEBUTUHAN_STOK"] = to_num(merged["QTY"]).fillna(0) - to_num(merged["STOK"]).fillna(0)
+    merged["PRIORITAS_STOK"] = np.where(
+        merged["KET"].astype(str).str.upper().eq("REFILL"),
+        2,
+        np.where(merged["KET"].astype(str).str.upper().eq("CEK"), 1, 0)
+    )
 
-    work_df["KEBUTUHAN_STOK"] = to_num(work_df["QTY"]).fillna(0) - to_num(work_df["STOK"]).fillna(0)
-    out = work_df[["TEAM", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY", "KEBUTUHAN_STOK"]].copy()
+    out = merged[["TEAM", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY", "KEBUTUHAN_STOK", "PRIORITAS_STOK"]].copy()
     out["QTY"] = pd.to_numeric(out["QTY"], errors="coerce").fillna(0).round(0).astype(int)
     out["STOK"] = pd.to_numeric(out["STOK"], errors="coerce").fillna(0).round(0).astype(int)
     out["KEBUTUHAN_STOK"] = pd.to_numeric(out["KEBUTUHAN_STOK"], errors="coerce").fillna(0)
-    out = out.sort_values(["KEBUTUHAN_STOK", "QTY", "TEAM", "KODE BARANG"], ascending=[False, False, True, True]).reset_index(drop=True)
+
+    out = out.sort_values(
+        ["PRIORITAS_STOK", "KEBUTUHAN_STOK", "QTY", "TEAM", "KODE BARANG"],
+        ascending=[False, False, False, True, True]
+    ).reset_index(drop=True)
+
     return out[["TEAM", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY"]]
 def render_sales_pivot_alert_table(df: pd.DataFrame):
     if df.empty:
