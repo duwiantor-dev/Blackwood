@@ -624,7 +624,7 @@ def load_sales_pivot(file) -> pd.DataFrame:
     if "SPESIFIKASI" not in df.columns:
         df["SPESIFIKASI"] = np.nan
 
-    df["TEAM"] = df["TEAM_RAW"].apply(normalize_display_team_code)
+    df["TEAM"] = normalize_text(df["TEAM_RAW"])
     df["TEAM_KEY"] = df["TEAM_RAW"].apply(normalize_team_code)
     df["KODE BARANG"] = normalize_text(df["KODE BARANG"])
     df["SPESIFIKASI"] = normalize_text(df["SPESIFIKASI"])
@@ -663,40 +663,20 @@ def build_sales_pivot_alerts(
         return pd.DataFrame(columns=empty_cols)
 
     base = sales_pivot.copy()
+    base["TGL"] = pd.to_datetime(base["TGL"], errors="coerce").dt.normalize()
+    base = base[base["TGL"].notna()].copy()
 
     default_start_ts, default_end_ts = get_period_date_range(base, period)
     start_ts = pd.to_datetime(start_date, errors="coerce") if start_date is not None else pd.NaT
     end_ts = pd.to_datetime(end_date, errors="coerce") if end_date is not None else pd.NaT
 
-    if pd.isna(start_ts):
-        start_ts = default_start_ts
-    else:
-        start_ts = start_ts.normalize()
+    start_ts = default_start_ts if pd.isna(start_ts) else start_ts.normalize()
+    end_ts = default_end_ts if pd.isna(end_ts) else end_ts.normalize()
 
-    if pd.isna(end_ts):
-        end_ts = default_end_ts
-    else:
-        end_ts = end_ts.normalize()
-
-    if start_ts is not None and end_ts is not None and start_ts > end_ts:
-        start_ts, end_ts = end_ts, start_ts
-
-    if start_ts is not None:
+    if pd.notna(start_ts):
         base = base[base["TGL"] >= start_ts]
-    if end_ts is not None:
+    if pd.notna(end_ts):
         base = base[base["TGL"] <= end_ts]
-
-    if selected_kode_barang:
-        base = base[base["KODE BARANG"].isin(selected_kode_barang)]
-    if selected_teams:
-        base = base[base["TEAM"].isin(selected_teams)]
-    if base.empty:
-        return pd.DataFrame(columns=empty_cols)
-
-    base = (
-        base.groupby(["TEAM", "TEAM_KEY", "KODE BARANG"], as_index=False)
-        .agg(SPESIFIKASI=("SPESIFIKASI", "first"), QTY=("QTY", "sum"))
-    )
 
     pl = pricelist_wh.copy()
     if "KODEBARANG" not in pl.columns:
@@ -708,15 +688,29 @@ def build_sales_pivot_alerts(
         pl = pl[pl["BRAND"].isin(selected_brands)]
     if selected_segments:
         pl = pl[pl["PRICE_SEGMENT"].isin(selected_segments)]
+    if pl.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    allowed_codes = set(normalize_text(pl["KODEBARANG"]).dropna().tolist())
+    base["KODE BARANG"] = normalize_text(base["KODE BARANG"])
+    base = base[base["KODE BARANG"].isin(allowed_codes)].copy()
+
+    if selected_kode_barang:
+        selected_kode_barang_norm = set(normalize_text(pd.Series(selected_kode_barang)).dropna().tolist())
+        base = base[base["KODE BARANG"].isin(selected_kode_barang_norm)]
+    if selected_teams:
+        selected_teams_norm = set(normalize_text(pd.Series(selected_teams)).dropna().tolist())
+        base = base[base["TEAM"].isin(selected_teams_norm)]
+
+    if base.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    base = (
+        base.groupby(["TEAM", "TEAM_KEY", "KODE BARANG"], as_index=False)
+        .agg(SPESIFIKASI=("SPESIFIKASI", "first"), QTY=("QTY", "sum"))
+    )
 
     merged = base.merge(pl, how="left", left_on="KODE BARANG", right_on="KODEBARANG")
-
-    if selected_products:
-        merged = merged[merged["PRODUCT"].isin(selected_products)]
-    if selected_brands:
-        merged = merged[merged["BRAND"].isin(selected_brands)]
-    if selected_segments:
-        merged = merged[merged["PRICE_SEGMENT"].isin(selected_segments)]
 
     allowed_ready_team_keys = {"JKT1A", "JKT3A", "JKT3B", "JKT3C", "JKT4A", "JKT4B"}
 
@@ -744,7 +738,11 @@ def build_sales_pivot_alerts(
         values = pd.to_numeric(pd.Series([row.get(c, 0) for c in cols]), errors="coerce").fillna(0)
         return float(values.sum())
 
-    team_keys = sorted([str(k).strip().upper() for k in warehouse_stock_cols.keys() if str(k).strip().upper() != "DEFAULT"])
+    team_keys = sorted([
+        str(k).strip().upper()
+        for k in warehouse_stock_cols.keys()
+        if str(k).strip().upper() != "DEFAULT"
+    ])
 
     def get_current_stock(row):
         cols = get_stock_cols_by_team(row.get("TEAM_KEY"))
@@ -758,7 +756,6 @@ def build_sales_pivot_alerts(
             team_key = normalize_team_lookup_key(team_code)
             if team_key == current_team_key:
                 continue
-
             if team_key not in allowed_ready_team_keys:
                 continue
 
@@ -767,10 +764,10 @@ def build_sales_pivot_alerts(
             cols = [c for c in cols if c in merged.columns]
             total_stock = sum_stock_from_cols(row, cols)
             if total_stock > 0:
-                ready_list.append((team_key, int(round(total_stock))))
+                ready_list.append((team_code.replace(" ", ""), int(round(total_stock))))
 
         ready_list = sorted(ready_list, key=lambda x: x[0])
-        return ", ".join([f"{team} ({qty})" for team, qty in ready_list])
+        return ", ".join([f"{code} ({qty})" for code, qty in ready_list])
 
     merged["SPESIFIKASI"] = merged["SPESIFIKASI_x"].fillna(merged.get("SPESIFIKASI_y", ""))
     merged["STOK"] = merged.apply(get_current_stock, axis=1)
@@ -805,6 +802,7 @@ def build_sales_pivot_alerts(
     ).reset_index(drop=True)
 
     return out[["TEAM", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY"]]
+
 def render_sales_pivot_alert_table(df: pd.DataFrame):
     if df.empty:
         st.info("Analisa Stok belum menemukan data.")
@@ -1221,7 +1219,7 @@ with st.container(border=True):
     main_table_export = render_main_table_dynamic(main_table_export, comparison_division)
 
 stok_kode_barang_options = sorted(sales_pivot["KODE BARANG"].dropna().unique().tolist()) if not sales_pivot.empty and "KODE BARANG" in sales_pivot.columns else []
-stok_team_options = sorted(sales_pivot["TEAM"].dropna().unique().tolist()) if not sales_pivot.empty and "TEAM" in sales_pivot.columns else []
+stok_team_options = sorted(normalize_text(sales_pivot["TEAM"]).dropna().unique().tolist()) if not sales_pivot.empty and "TEAM" in sales_pivot.columns else []
 stok_min_date = sales_pivot["TGL"].min() if not sales_pivot.empty and "TGL" in sales_pivot.columns else None
 stok_max_date = sales_pivot["TGL"].max() if not sales_pivot.empty and "TGL" in sales_pivot.columns else None
 stok_min_date_value = pd.to_datetime(stok_min_date, errors="coerce").date() if pd.notna(stok_min_date) else None
