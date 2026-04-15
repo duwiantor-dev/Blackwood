@@ -305,7 +305,7 @@ def normalize_team_lookup_key(value) -> str:
     return str(value).strip().upper().replace(" ", "").replace("-", "")
 
 def ensure_datetime(series: pd.Series) -> pd.Series:
-    return pd.to_datetime(series, errors="coerce")
+    return pd.to_datetime(series, errors="coerce", dayfirst=True)
 
 
 def get_period_date_range(df: pd.DataFrame, period: str):
@@ -587,7 +587,7 @@ def load_pricelist_with_warehouses(file):
 
 def load_sales_pivot(file) -> pd.DataFrame:
     raw = pd.read_excel(file, header=1).copy()
-    raw = raw.iloc[2:].copy().reset_index(drop=True)
+    raw = raw.iloc[1:].copy().reset_index(drop=True)
     raw.columns = [str(c).strip().upper() for c in raw.columns]
     raw = raw.loc[:, ~pd.Index(raw.columns).duplicated()].copy()
 
