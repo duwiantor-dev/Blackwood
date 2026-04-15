@@ -633,18 +633,15 @@ def load_sales_pivot(file) -> pd.DataFrame:
         tmp = df[df["TGL"].dt.normalize() >= start_date].copy()
         if tmp.empty:
             continue
-        agg = (
-            tmp.groupby(["TEAM", "TEAM_KEY", "KODE BARANG"], as_index=False)
-            .agg({"SPESIFIKASI": "first", "QTY": "sum"})
-        )
-        agg["PERIOD"] = label
-        period_frames.append(agg)
+        tmp_period = tmp[["TEAM", "TEAM_KEY", "KODE BARANG", "SPESIFIKASI", "QTY", "TGL"]].copy()
+        tmp_period["PERIOD"] = label
+        period_frames.append(tmp_period)
 
     if not period_frames:
-        return pd.DataFrame(columns=["TEAM", "TEAM_KEY", "KODE BARANG", "SPESIFIKASI", "QTY", "PERIOD"])
+        return pd.DataFrame(columns=["TEAM", "TEAM_KEY", "KODE BARANG", "SPESIFIKASI", "QTY", "TGL", "PERIOD"])
 
     return pd.concat(period_frames, ignore_index=True).sort_values(
-        ["PERIOD", "QTY", "TEAM", "KODE BARANG"], ascending=[True, False, True, True]
+        ["PERIOD", "TGL", "QTY", "TEAM", "KODE BARANG"], ascending=[True, False, False, True, True]
     ).reset_index(drop=True)
 
 
@@ -658,12 +655,31 @@ def build_sales_pivot_alerts(
     selected_products=None,
     selected_brands=None,
     selected_segments=None,
+    selected_kode_barang=None,
+    selected_teams=None,
+    start_date=None,
+    end_date=None,
 ) -> pd.DataFrame:
     empty_cols = ["TEAM", "KODE BARANG", "SPESIFIKASI", "QTY", "STOK", "KET", "GUDANG READY"]
     if sales_pivot.empty or pricelist_wh.empty:
         return pd.DataFrame(columns=empty_cols)
 
     base = sales_pivot[sales_pivot["PERIOD"] == period].copy()
+    if base.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    if selected_kode_barang:
+        base = base[base["KODE BARANG"].isin(selected_kode_barang)]
+    if selected_teams:
+        base = base[base["TEAM"].isin(selected_teams)]
+    if start_date is not None:
+        start_ts = pd.to_datetime(start_date, errors="coerce")
+        if pd.notna(start_ts):
+            base = base[base["TGL"].dt.normalize() >= start_ts.normalize()]
+    if end_date is not None:
+        end_ts = pd.to_datetime(end_date, errors="coerce")
+        if pd.notna(end_ts):
+            base = base[base["TGL"].dt.normalize() <= end_ts.normalize()]
     if base.empty:
         return pd.DataFrame(columns=empty_cols)
 
@@ -1168,7 +1184,7 @@ if filtered.empty:
     st.stop()
 
 with st.container(border=True):
-    st.markdown("### ANALISA BY SEGMENT")
+    st.markdown("### ANALISA SEGMENT")
     left, right = st.columns(2)
     with left:
         render_left_table(build_segment_table(filtered, selected_period, comparison_division), f"Segmentasi Harga - {selected_period}", selected_division=comparison_division, use_card=False)
@@ -1176,7 +1192,7 @@ with st.container(border=True):
         render_left_table(build_brand_table(filtered, selected_period, comparison_division), f"Segmentasi Brand - {selected_period}", selected_division=comparison_division, use_card=False)
 
 with st.container(border=True):
-    st.markdown("### ANALISA BY SKU")
+    st.markdown("### ANALISA SKU")
     main_table_export = build_main_table_filtered(
         filtered,
         selected_period,
@@ -1193,7 +1209,7 @@ if "stok_period" not in st.session_state:
     st.session_state["stok_period"] = selected_period if selected_period in PERIODS else PERIODS[0]
 
 with st.container(border=True):
-    st.markdown("### ANALISA BY STOK")
+    st.markdown("### ANALISA STOK")
     with st.form("stok_filter_form"):
         col1, col2, col3 = st.columns([1.4, 1.0, 0.6])
 
