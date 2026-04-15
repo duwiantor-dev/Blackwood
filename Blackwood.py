@@ -308,6 +308,21 @@ def ensure_datetime(series: pd.Series) -> pd.Series:
     return pd.to_datetime(series, errors="coerce")
 
 
+def get_period_date_range(df: pd.DataFrame, period: str):
+    if df is None or df.empty or "TGL" not in df.columns:
+        return pd.NaT, pd.NaT
+
+    tgl = pd.to_datetime(df["TGL"], errors="coerce").dropna()
+    if tgl.empty:
+        return pd.NaT, pd.NaT
+
+    max_date = tgl.max().normalize()
+    days_map = {"7DAY": 7, "14DAY": 14, "30DAY": 30}
+    days = days_map.get(period, 7)
+    start_date = max_date - pd.Timedelta(days=days - 1)
+    return start_date, max_date
+
+
 # =========================================================
 # MPLSSR
 # =========================================================
