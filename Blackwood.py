@@ -932,7 +932,7 @@ def build_sku_gp_besar_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, sel
         (to_num(out["STOK"]).fillna(0) > 0)
     ].copy()
 
-    out = out.sort_values(["GP", "STOK", "KODE BARANG"], ascending=[False, False, True]).head(50).reset_index(drop=True)
+    out = out.sort_values(["GP", "STOK", "KODE BARANG"], ascending=[False, False, True]).reset_index(drop=True)
     return out[columns]
 
 
@@ -975,7 +975,7 @@ def build_sku_top_gp_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, selec
         merged.groupby(["KODE BARANG", "SPESIFIKASI_FINAL", "PRODUCT_FINAL"], dropna=False, as_index=False)
         .agg(M3=("M3_VAL", "max"), M0=("M0_VAL", "max"), QTY=("QTY", "sum"), GP_TOTAL=("GP TOTAL", "sum"))
         .sort_values(["GP_TOTAL", "QTY", "KODE BARANG"], ascending=[False, False, True])
-        .head(50)
+        
         .reset_index(drop=True)
     )
 
@@ -1065,7 +1065,7 @@ def build_brand_table(df, period, comparison_division_label="03 OLP"):
             brand[div] = 0
     brand = brand[["BRAND", "DIV03", "DIV04", "DIV05"]].copy()
     brand["TOTAL"] = brand[["DIV03", "DIV04", "DIV05"]].sum(axis=1)
-    brand = brand.sort_values(["TOTAL", "BRAND"], ascending=[False, True]).head(50).drop(columns=["TOTAL"])
+    brand = brand.sort_values(["TOTAL", "BRAND"], ascending=[False, True]).drop(columns=["TOTAL"])
     brand.columns = ["BRAND", "03 OLP", "04 MOD", "05 OLR"]
 
     compare_col = comparison_division_label if comparison_division_label in ["03 OLP", "04 MOD"] else "03 OLP"
