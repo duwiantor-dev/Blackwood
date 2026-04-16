@@ -824,7 +824,7 @@ def build_sales_pivot_alerts(
 
 def render_sales_pivot_alert_table(df: pd.DataFrame):
     if df.empty:
-        st.info("Analisa Stok belum menemukan data.")
+        st.info("Analisa Sales vs Stok 05 OLR belum menemukan data.")
         return
 
     show_df = df.copy()
@@ -859,6 +859,10 @@ def build_sku_gp_besar_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, sel
     sales_base = sales_base[sales_base["GP"] > 0].copy()
 
     stock_base = stock.copy()
+    for col in ["KODEBARANG", "SPESIFIKASI", "PRODUCT", "BRAND", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05"]:
+        if col not in stock_base.columns:
+            stock_base[col] = np.nan if col in ["SPESIFIKASI", "PRODUCT", "BRAND"] else 0
+
     if selected_products:
         stock_base = stock_base[stock_base["PRODUCT"].isin(selected_products)].copy()
 
@@ -876,18 +880,25 @@ def build_sku_gp_besar_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, sel
     )
 
     merged["SPESIFIKASI_FINAL"] = merged["SPESIFIKASI_x"].fillna(merged.get("SPESIFIKASI_y"))
+    merged["PRODUCT_FINAL"] = merged.get("PRODUCT")
+    merged["BRAND_FINAL"] = merged.get("BRAND")
     merged["TOTAL STOK"] = to_num(merged["TOTAL STOK"]).fillna(0)
     merged = merged[merged["TOTAL STOK"] > 0].copy()
 
     out = (
-        merged.groupby(["KODE BARANG", "SPESIFIKASI_FINAL", "PRODUCT", "BRAND"], dropna=False, as_index=False)
+        merged.groupby(["KODE BARANG", "SPESIFIKASI_FINAL", "PRODUCT_FINAL", "BRAND_FINAL"], dropna=False, as_index=False)
         .agg(GP=("GP", "max"), TOTAL_STOK=("TOTAL STOK", "max"))
         .sort_values(["GP", "TOTAL_STOK", "KODE BARANG"], ascending=[False, False, True])
         .head(20)
         .reset_index(drop=True)
     )
 
-    out = out.rename(columns={"SPESIFIKASI_FINAL": "SPESIFIKASI", "TOTAL_STOK": "TOTAL STOK"})
+    out = out.rename(columns={
+        "SPESIFIKASI_FINAL": "SPESIFIKASI",
+        "PRODUCT_FINAL": "PRODUCT",
+        "BRAND_FINAL": "BRAND",
+        "TOTAL_STOK": "TOTAL STOK"
+    })
     return out[columns]
 
 
@@ -904,6 +915,10 @@ def build_sku_top_gp_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, selec
     sales_base = sales_base[sales_base["GP TOTAL"] > 0].copy()
 
     stock_base = stock.copy()
+    for col in ["KODEBARANG", "SPESIFIKASI", "PRODUCT", "BRAND", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05"]:
+        if col not in stock_base.columns:
+            stock_base[col] = np.nan if col in ["SPESIFIKASI", "PRODUCT", "BRAND"] else 0
+
     if selected_products:
         stock_base = stock_base[stock_base["PRODUCT"].isin(selected_products)].copy()
 
@@ -921,16 +936,24 @@ def build_sku_top_gp_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, selec
     )
 
     merged["SPESIFIKASI_FINAL"] = merged["SPESIFIKASI_x"].fillna(merged.get("SPESIFIKASI_y"))
+    merged["PRODUCT_FINAL"] = merged.get("PRODUCT")
+    merged["BRAND_FINAL"] = merged.get("BRAND")
 
     out = (
-        merged.groupby(["KODE BARANG", "SPESIFIKASI_FINAL", "PRODUCT", "BRAND"], dropna=False, as_index=False)
+        merged.groupby(["KODE BARANG", "SPESIFIKASI_FINAL", "PRODUCT_FINAL", "BRAND_FINAL"], dropna=False, as_index=False)
         .agg(QTY=("QTY", "sum"), GP_TOTAL=("GP TOTAL", "sum"), TOTAL_STOK=("TOTAL STOK", "max"))
         .sort_values(["GP_TOTAL", "QTY", "KODE BARANG"], ascending=[False, False, True])
         .head(20)
         .reset_index(drop=True)
     )
 
-    out = out.rename(columns={"SPESIFIKASI_FINAL": "SPESIFIKASI", "GP_TOTAL": "GP TOTAL", "TOTAL_STOK": "TOTAL STOK"})
+    out = out.rename(columns={
+        "SPESIFIKASI_FINAL": "SPESIFIKASI",
+        "PRODUCT_FINAL": "PRODUCT",
+        "BRAND_FINAL": "BRAND",
+        "GP_TOTAL": "GP TOTAL",
+        "TOTAL_STOK": "TOTAL STOK"
+    })
     return out[columns]
 
 
@@ -1329,7 +1352,7 @@ if filtered.empty:
     st.stop()
 
 with st.container(border=True):
-    st.markdown("### ANALISA SEGMENT")
+    st.markdown("### Analisa Segment vs Divisi Lain")
     left, right = st.columns(2)
     with left:
         render_left_table(build_segment_table(filtered, selected_period, comparison_division), f"Segmentasi Harga - {selected_period}", selected_division=comparison_division, use_card=False)
@@ -1337,7 +1360,7 @@ with st.container(border=True):
         render_left_table(build_brand_table(filtered, selected_period, comparison_division), f"Segmentasi Brand - {selected_period}", selected_division=comparison_division, use_card=False)
 
 with st.container(border=True):
-    st.markdown("### ANALISA SKU")
+    st.markdown("### Analisa SKU vs Divisi Lain")
     main_table_export = build_main_table_filtered(
         filtered,
         selected_period,
@@ -1394,7 +1417,7 @@ if (
     st.session_state["stok_end_date"] = period_default_end_value
 
 with st.container(border=True):
-    st.markdown("### ANALISA STOK")
+    st.markdown("### Analisa Sales vs Stok 05 OLR")
     with st.form("stok_filter_form"):
         col1, col2 = st.columns(2)
         with col1:
