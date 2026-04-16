@@ -596,6 +596,7 @@ def load_sales_pivot(file) -> pd.DataFrame:
     spesifikasi_col = next((c for c in raw.columns if "SPESIFIKASI" in c), None)
     qty_col = next((c for c in raw.columns if c == "QTY" or "QTY" in c or "PCS" in c or "TERJUAL" in c), None)
     tgl_col = next((c for c in raw.columns if c == "TGL" or "TGL" in c or "DATE" in c), None)
+    country_col = next((c for c in raw.columns if c == "COUNTRY" or "COUNTRY" in c), None)
     m0_col = next((c for c in raw.columns if c == "M0" or "M0" in c), None)
     m3_col = next((c for c in raw.columns if c == "M3" or "M3" in c), None)
     harga_akhir_col = next((c for c in raw.columns if "HARGA AKHIR" in c or "HARGAAKHIR" in c), None)
@@ -610,7 +611,7 @@ def load_sales_pivot(file) -> pd.DataFrame:
         )
 
     use_cols = [team_col, kode_barang_col, qty_col, tgl_col]
-    for extra_col in [spesifikasi_col, m0_col, m3_col, harga_akhir_col]:
+    for extra_col in [country_col, spesifikasi_col, m0_col, m3_col, harga_akhir_col]:
         if extra_col is not None and extra_col not in use_cols:
             use_cols.append(extra_col)
 
@@ -621,6 +622,8 @@ def load_sales_pivot(file) -> pd.DataFrame:
         qty_col: "QTY",
         tgl_col: "TGL",
     }
+    if country_col is not None:
+        rename_map[country_col] = "COUNTRY"
     if spesifikasi_col is not None:
         rename_map[spesifikasi_col] = "SPESIFIKASI"
     if m0_col is not None:
@@ -631,6 +634,8 @@ def load_sales_pivot(file) -> pd.DataFrame:
         rename_map[harga_akhir_col] = "HARGA AKHIR"
     df = df.rename(columns=rename_map)
 
+    if "COUNTRY" not in df.columns:
+        df["COUNTRY"] = np.nan
     if "SPESIFIKASI" not in df.columns:
         df["SPESIFIKASI"] = np.nan
     if "M0" not in df.columns:
@@ -642,6 +647,7 @@ def load_sales_pivot(file) -> pd.DataFrame:
 
     df["TEAM"] = normalize_text(df["TEAM_RAW"])
     df["TEAM_KEY"] = df["TEAM_RAW"].apply(normalize_team_code)
+    df["COUNTRY"] = normalize_text(df["COUNTRY"])
     df["KODE BARANG"] = normalize_text(df["KODE BARANG"])
     df["SPESIFIKASI"] = normalize_text(df["SPESIFIKASI"])
     df["QTY"] = to_num(df["QTY"]).fillna(0)
@@ -657,9 +663,9 @@ def load_sales_pivot(file) -> pd.DataFrame:
     df = df[df["TGL"].notna()].copy()
 
     if df.empty:
-        return pd.DataFrame(columns=["TEAM", "TEAM_KEY", "KODE BARANG", "SPESIFIKASI", "QTY", "TGL", "M0", "M3", "HARGA AKHIR"])
+        return pd.DataFrame(columns=["TEAM", "TEAM_KEY", "COUNTRY", "KODE BARANG", "SPESIFIKASI", "QTY", "TGL", "M0", "M3", "HARGA AKHIR"])
 
-    return df[["TEAM", "TEAM_KEY", "KODE BARANG", "SPESIFIKASI", "QTY", "TGL", "M0", "M3", "HARGA AKHIR"]].sort_values(
+    return df[["TEAM", "TEAM_KEY", "COUNTRY", "KODE BARANG", "SPESIFIKASI", "QTY", "TGL", "M0", "M3", "HARGA AKHIR"]].sort_values(
         ["TGL", "TEAM", "KODE BARANG"], ascending=[False, True, True]
     ).reset_index(drop=True)
 
@@ -850,11 +856,12 @@ def render_sales_pivot_alert_table(df: pd.DataFrame):
 
 
 def build_sku_gp_besar_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, selected_products=None) -> pd.DataFrame:
-    columns = ["KODE BARANG", "SPESIFIKASI", "PRODUCT", "BRAND", "GP", "TOTAL STOK"]
+    columns = ["KODE BARANG", "SPESIFIKASI", "PRODUCT", "BRAND", "M0", "GP", "TOTAL STOK"]
     if sales_pivot.empty or stock.empty:
         return pd.DataFrame(columns=columns)
 
     sales_base = sales_pivot.copy()
+    sales_base = sales_base[sales_base.get("COUNTRY", pd.Series(index=sales_base.index)).isin(["LAPTOP", "TELCO"])].copy()
     sales_base["GP"] = to_num(sales_base.get("M3", np.nan)).fillna(0) - to_num(sales_base.get("M0", np.nan)).fillna(0)
     sales_base = sales_base[sales_base["GP"] > 0].copy()
 
@@ -887,9 +894,9 @@ def build_sku_gp_besar_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, sel
 
     out = (
         merged.groupby(["KODE BARANG", "SPESIFIKASI_FINAL", "PRODUCT_FINAL", "BRAND_FINAL"], dropna=False, as_index=False)
-        .agg(GP=("GP", "max"), TOTAL_STOK=("TOTAL STOK", "max"))
+        .agg(M0=("M0", "max"), GP=("GP", "max"), TOTAL_STOK=("TOTAL STOK", "max"))
         .sort_values(["GP", "TOTAL_STOK", "KODE BARANG"], ascending=[False, False, True])
-        .head(20)
+        .head(10)
         .reset_index(drop=True)
     )
 
@@ -903,11 +910,12 @@ def build_sku_gp_besar_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, sel
 
 
 def build_sku_top_gp_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, selected_products=None) -> pd.DataFrame:
-    columns = ["KODE BARANG", "SPESIFIKASI", "PRODUCT", "BRAND", "QTY", "GP TOTAL", "TOTAL STOK"]
+    columns = ["KODE BARANG", "SPESIFIKASI", "PRODUCT", "BRAND", "M0", "QTY", "GP TOTAL", "TOTAL STOK"]
     if sales_pivot.empty or stock.empty:
         return pd.DataFrame(columns=columns)
 
     sales_base = sales_pivot.copy()
+    sales_base = sales_base[sales_base.get("COUNTRY", pd.Series(index=sales_base.index)).isin(["LAPTOP", "TELCO"])].copy()
     sales_base["GP TOTAL"] = (
         (to_num(sales_base.get("HARGA AKHIR", np.nan)).fillna(0) - to_num(sales_base.get("M0", np.nan)).fillna(0)) *
         to_num(sales_base.get("QTY", 0)).fillna(0)
@@ -941,9 +949,9 @@ def build_sku_top_gp_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, selec
 
     out = (
         merged.groupby(["KODE BARANG", "SPESIFIKASI_FINAL", "PRODUCT_FINAL", "BRAND_FINAL"], dropna=False, as_index=False)
-        .agg(QTY=("QTY", "sum"), GP_TOTAL=("GP TOTAL", "sum"), TOTAL_STOK=("TOTAL STOK", "max"))
+        .agg(M0=("M0", "max"), QTY=("QTY", "sum"), GP_TOTAL=("GP TOTAL", "sum"), TOTAL_STOK=("TOTAL STOK", "max"))
         .sort_values(["GP_TOTAL", "QTY", "KODE BARANG"], ascending=[False, False, True])
-        .head(20)
+        .head(10)
         .reset_index(drop=True)
     )
 
@@ -965,7 +973,7 @@ def render_simple_card_table(df: pd.DataFrame, title: str):
 
     show_df = df.copy()
     for col in show_df.columns:
-        if col in ["GP", "GP TOTAL", "QTY", "TOTAL STOK"]:
+        if col in ["M0", "GP", "GP TOTAL", "QTY", "TOTAL STOK"]:
             show_df[col] = pd.to_numeric(show_df[col], errors="coerce").fillna(0).round(0).astype(int)
 
     html = []
@@ -1491,24 +1499,28 @@ with st.container(border=True):
 
     render_sales_pivot_alert_table(sales_pivot_alerts)
 
-with st.container(border=True):
-    render_simple_card_table(
-        build_sku_gp_besar_table(
-            sales_pivot=sales_pivot,
-            stock=stock,
-            selected_products=st.session_state.get("stok_products", selected_products),
-        ),
-        "SKU DENGAN GP BESAR"
-    )
+card_col1, card_col2 = st.columns(2)
 
-with st.container(border=True):
-    render_simple_card_table(
-        build_sku_top_gp_table(
-            sales_pivot=sales_pivot,
-            stock=stock,
-            selected_products=st.session_state.get("stok_products", selected_products),
-        ),
-        "SKU TOP GP"
-    )
+with card_col1:
+    with st.container(border=True):
+        render_simple_card_table(
+            build_sku_gp_besar_table(
+                sales_pivot=sales_pivot,
+                stock=stock,
+                selected_products=st.session_state.get("stok_products", selected_products),
+            ),
+            "SKU Dengan GP Besar"
+        )
+
+with card_col2:
+    with st.container(border=True):
+        render_simple_card_table(
+            build_sku_top_gp_table(
+                sales_pivot=sales_pivot,
+                stock=stock,
+                selected_products=st.session_state.get("stok_products", selected_products),
+            ),
+            "SKU Top GP"
+        )
 
 st.markdown("<div style='height:120px;'></div>", unsafe_allow_html=True)
