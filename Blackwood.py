@@ -923,7 +923,15 @@ def build_sku_gp_besar_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, sel
 
     out = stock_base[["KODE BARANG", "SPESIFIKASI", "PRODUCT", "M3_VAL", "M0_VAL", "GP", "STOK"]].copy()
     out = out.rename(columns={"M3_VAL": "M3", "M0_VAL": "M0"})
-    out = out[(to_num(out["GP"]).fillna(0) > 0) & (to_num(out["STOK"]).fillna(0) > 0)].copy()
+
+    # skip M0 kosong / 0
+    out = out[to_num(out["M0"]).fillna(0) > 0].copy()
+
+    out = out[
+        (to_num(out["GP"]).fillna(0) > 0) &
+        (to_num(out["STOK"]).fillna(0) > 0)
+    ].copy()
+
     out = out.sort_values(["GP", "STOK", "KODE BARANG"], ascending=[False, False, True]).head(10).reset_index(drop=True)
     return out[columns]
 
