@@ -615,6 +615,8 @@ def load_sales_pivot(file) -> pd.DataFrame:
     qty_col = next((c for c in raw.columns if c == "QTY" or "QTY" in c or "PCS" in c or "TERJUAL" in c), None)
     tgl_col = next((c for c in raw.columns if c == "TGL" or "TGL" in c or "DATE" in c), None)
     country_col = next((c for c in raw.columns if c == "COUNTRY" or "COUNTRY" in c), None)
+    product_col = next((c for c in raw.columns if c == "PRODUCT" or "PRODUCT" in c), None)
+    gp_m0_col = next((c for c in raw.columns if c == "GP M0" or "GPM0" in c or "GP M0" in c.replace("_", " ")), None)
     m0_col = next((c for c in raw.columns if c == "M0" or "M0" in c), None)
     m3_col = next((c for c in raw.columns if c == "M3" or "M3" in c), None)
     harga_akhir_col = next((c for c in raw.columns if "HARGA AKHIR" in c or "HARGAAKHIR" in c), None)
@@ -629,7 +631,7 @@ def load_sales_pivot(file) -> pd.DataFrame:
         )
 
     use_cols = [team_col, kode_barang_col, qty_col, tgl_col]
-    for extra_col in [country_col, spesifikasi_col, m0_col, m3_col, harga_akhir_col]:
+    for extra_col in [country_col, product_col, gp_m0_col, spesifikasi_col, m0_col, m3_col, harga_akhir_col]:
         if extra_col is not None and extra_col not in use_cols:
             use_cols.append(extra_col)
 
@@ -642,6 +644,10 @@ def load_sales_pivot(file) -> pd.DataFrame:
     }
     if country_col is not None:
         rename_map[country_col] = "COUNTRY"
+    if product_col is not None:
+        rename_map[product_col] = "PRODUCT"
+    if gp_m0_col is not None:
+        rename_map[gp_m0_col] = "GP M0"
     if spesifikasi_col is not None:
         rename_map[spesifikasi_col] = "SPESIFIKASI"
     if m0_col is not None:
@@ -654,6 +660,10 @@ def load_sales_pivot(file) -> pd.DataFrame:
 
     if "COUNTRY" not in df.columns:
         df["COUNTRY"] = np.nan
+    if "PRODUCT" not in df.columns:
+        df["PRODUCT"] = np.nan
+    if "GP M0" not in df.columns:
+        df["GP M0"] = np.nan
     if "SPESIFIKASI" not in df.columns:
         df["SPESIFIKASI"] = np.nan
     if "M0" not in df.columns:
@@ -666,9 +676,11 @@ def load_sales_pivot(file) -> pd.DataFrame:
     df["TEAM"] = normalize_text(df["TEAM_RAW"])
     df["TEAM_KEY"] = df["TEAM_RAW"].apply(normalize_team_code)
     df["COUNTRY"] = normalize_text(df["COUNTRY"])
+    df["PRODUCT"] = normalize_text(df["PRODUCT"])
     df["KODE BARANG"] = normalize_text(df["KODE BARANG"])
     df["SPESIFIKASI"] = normalize_text(df["SPESIFIKASI"])
     df["QTY"] = to_num(df["QTY"]).fillna(0)
+    df["GP M0"] = to_num(df["GP M0"])
     df["M0"] = to_num(df["M0"])
     df["M3"] = to_num(df["M3"])
     df["HARGA AKHIR"] = to_num(df["HARGA AKHIR"])
@@ -681,9 +693,9 @@ def load_sales_pivot(file) -> pd.DataFrame:
     df = df[df["TGL"].notna()].copy()
 
     if df.empty:
-        return pd.DataFrame(columns=["TEAM", "TEAM_KEY", "COUNTRY", "KODE BARANG", "SPESIFIKASI", "QTY", "TGL", "M0", "M3", "HARGA AKHIR"])
+        return pd.DataFrame(columns=["TEAM", "TEAM_KEY", "COUNTRY", "PRODUCT", "KODE BARANG", "SPESIFIKASI", "QTY", "TGL", "GP M0", "M0", "M3", "HARGA AKHIR"])
 
-    return df[["TEAM", "TEAM_KEY", "COUNTRY", "KODE BARANG", "SPESIFIKASI", "QTY", "TGL", "M0", "M3", "HARGA AKHIR"]].sort_values(
+    return df[["TEAM", "TEAM_KEY", "COUNTRY", "PRODUCT", "KODE BARANG", "SPESIFIKASI", "QTY", "TGL", "GP M0", "M0", "M3", "HARGA AKHIR"]].sort_values(
         ["TGL", "TEAM", "KODE BARANG"], ascending=[False, True, True]
     ).reset_index(drop=True)
 
@@ -937,53 +949,36 @@ def build_sku_gp_besar_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, sel
 
 
 def build_sku_top_gp_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, selected_products=None) -> pd.DataFrame:
-    columns = ["KODE BARANG", "SPESIFIKASI", "PRODUCT", "M3", "M0", "QTY", "GP TOTAL"]
-    if sales_pivot.empty or stock.empty:
+    columns = ["KODE BARANG", "SPESIFIKASI", "PRODUCT", "M3", "M0", "QTY", "GP M0"]
+    if sales_pivot.empty:
         return pd.DataFrame(columns=columns)
 
     sales_base = sales_pivot.copy()
-    sales_base = sales_base[sales_base.get("COUNTRY", pd.Series(index=sales_base.index)).isin(["LAPTOP", "TELCO"])].copy()
+    for col in ["PRODUCT", "SPESIFIKASI", "KODE BARANG", "M3", "M0", "QTY", "GP M0"]:
+        if col not in sales_base.columns:
+            sales_base[col] = np.nan
+
+    sales_base["PRODUCT"] = normalize_text(sales_base["PRODUCT"])
+    sales_base["KODE BARANG"] = normalize_text(sales_base["KODE BARANG"])
+    sales_base["SPESIFIKASI"] = normalize_text(sales_base["SPESIFIKASI"])
     sales_base["M3_VAL"] = to_num(sales_base.get("M3", np.nan)).fillna(0)
     sales_base["M0_VAL"] = to_num(sales_base.get("M0", np.nan)).fillna(0)
-    sales_base["GP TOTAL"] = (
-        (to_num(sales_base.get("HARGA AKHIR", np.nan)).fillna(0) - sales_base["M0_VAL"]) *
-        to_num(sales_base.get("QTY", 0)).fillna(0)
-    )
-    sales_base = sales_base[sales_base["GP TOTAL"] > 0].copy()
-
-    stock_base = stock.copy()
-    for col in ["KODEBARANG", "PRODUCT"]:
-        if col not in stock_base.columns:
-            stock_base[col] = np.nan
+    sales_base["GP_M0_VAL"] = to_num(sales_base.get("GP M0", np.nan)).fillna(0)
+    sales_base["QTY"] = to_num(sales_base.get("QTY", 0)).fillna(0)
 
     if selected_products:
-        stock_base = stock_base[stock_base["PRODUCT"].isin(selected_products)].copy()
+        sales_base = sales_base[sales_base["PRODUCT"].isin(selected_products)].copy()
 
-    stock_lookup = stock_base[["KODEBARANG", "PRODUCT"]].drop_duplicates(subset=["KODEBARANG"], keep="first").copy()
-
-    merged = sales_base.merge(
-        stock_lookup,
-        how="left",
-        left_on="KODE BARANG",
-        right_on="KODEBARANG"
-    )
-
-    merged["SPESIFIKASI_FINAL"] = merged["SPESIFIKASI"]
-    merged["PRODUCT_FINAL"] = merged.get("PRODUCT")
+    sales_base = sales_base[(sales_base["KODE BARANG"].notna()) & (sales_base["PRODUCT"].notna())].copy()
+    sales_base = sales_base[sales_base["GP_M0_VAL"] > 0].copy()
 
     out = (
-        merged.groupby(["KODE BARANG", "SPESIFIKASI_FINAL", "PRODUCT_FINAL"], dropna=False, as_index=False)
-        .agg(M3=("M3_VAL", "max"), M0=("M0_VAL", "max"), QTY=("QTY", "sum"), GP_TOTAL=("GP TOTAL", "sum"))
-        .sort_values(["GP_TOTAL", "QTY", "KODE BARANG"], ascending=[False, False, True])
-        
+        sales_base.groupby(["KODE BARANG", "SPESIFIKASI", "PRODUCT"], dropna=False, as_index=False)
+        .agg(M3=("M3_VAL", "max"), M0=("M0_VAL", "max"), QTY=("QTY", "sum"), **{"GP M0": ("GP_M0_VAL", "sum")})
+        .sort_values(["GP M0", "QTY", "KODE BARANG"], ascending=[False, False, True])
         .reset_index(drop=True)
     )
 
-    out = out.rename(columns={
-        "SPESIFIKASI_FINAL": "SPESIFIKASI",
-        "PRODUCT_FINAL": "PRODUCT",
-        "GP_TOTAL": "GP TOTAL",
-    })
     return out[columns]
 
 
@@ -994,7 +989,7 @@ def render_simple_card_table(df: pd.DataFrame, title: str):
         return
 
     show_df = df.copy()
-    for col in ["M3", "M0", "GP", "GP TOTAL"]:
+    for col in ["M3", "M0", "GP", "GP TOTAL", "GP M0"]:
         if col in show_df.columns:
             show_df[col] = show_df[col].apply(format_thousands_id)
     for col in ["QTY", "STOK"]:
@@ -1532,8 +1527,11 @@ with st.container(border=True):
 
 if "gp_products" not in st.session_state:
     st.session_state["gp_products"] = default_product.copy()
+top_gp_product_options = sorted(sales_pivot["PRODUCT"].dropna().unique().tolist()) if not sales_pivot.empty and "PRODUCT" in sales_pivot.columns else []
+default_top_gp_product = ["LAPTOP R"] if "LAPTOP R" in top_gp_product_options else []
+
 if "top_gp_products" not in st.session_state:
-    st.session_state["top_gp_products"] = default_product.copy()
+    st.session_state["top_gp_products"] = default_top_gp_product.copy()
 if "gp_cards_applied" not in st.session_state:
     st.session_state["gp_cards_applied"] = True
 
@@ -1577,8 +1575,8 @@ with card_col2:
             with top_filter_col:
                 top_gp_product_filter = st.multiselect(
                     "Filter Product - SKU Top GP",
-                    product_options,
-                    default=st.session_state.get("top_gp_products", []),
+                    top_gp_product_options,
+                    default=st.session_state.get("top_gp_products", default_top_gp_product),
                     key="top_gp_products_filter",
                 )
             with top_button_col:
