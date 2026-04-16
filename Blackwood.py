@@ -168,6 +168,15 @@ def normalize_text(series: pd.Series) -> pd.Series:
 def to_num(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce")
 
+def format_thousands_id(value):
+    try:
+        num = pd.to_numeric(value, errors="coerce")
+        if pd.isna(num):
+            return ""
+        return f"{int(round(float(num) / 1000)):,}".replace(",", ".")
+    except Exception:
+        return ""
+
 def price_segment(price: float) -> str:
     if pd.isna(price):
         return "UNKNOWN"
@@ -856,7 +865,7 @@ def render_sales_pivot_alert_table(df: pd.DataFrame):
 
 
 def build_sku_gp_besar_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, selected_products=None) -> pd.DataFrame:
-    columns = ["KODE BARANG", "SPESIFIKASI", "PRODUCT", "BRAND", "M0", "GP", "TOTAL STOK"]
+    columns = ["KODE BARANG", "SPESIFIKASI", "PRODUCT", "M3", "M0", "GP", "TOTAL STOK"]
     if sales_pivot.empty or stock.empty:
         return pd.DataFrame(columns=columns)
 
@@ -893,8 +902,8 @@ def build_sku_gp_besar_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, sel
     merged = merged[merged["TOTAL STOK"] > 0].copy()
 
     out = (
-        merged.groupby(["KODE BARANG", "SPESIFIKASI_FINAL", "PRODUCT_FINAL", "BRAND_FINAL"], dropna=False, as_index=False)
-        .agg(M0=("M0", "max"), GP=("GP", "max"), TOTAL_STOK=("TOTAL STOK", "max"))
+        merged.groupby(["KODE BARANG", "SPESIFIKASI_FINAL", "PRODUCT_FINAL"], dropna=False, as_index=False)
+        .agg(M3=("M3", "max"), M0=("M0", "max"), GP=("GP", "max"), TOTAL_STOK=("TOTAL STOK", "max"))
         .sort_values(["GP", "TOTAL_STOK", "KODE BARANG"], ascending=[False, False, True])
         .head(10)
         .reset_index(drop=True)
@@ -903,7 +912,6 @@ def build_sku_gp_besar_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, sel
     out = out.rename(columns={
         "SPESIFIKASI_FINAL": "SPESIFIKASI",
         "PRODUCT_FINAL": "PRODUCT",
-        "BRAND_FINAL": "BRAND",
         "TOTAL_STOK": "TOTAL STOK"
     })
     return out[columns]
@@ -972,9 +980,10 @@ def render_simple_card_table(df: pd.DataFrame, title: str):
         return
 
     show_df = df.copy()
-    for col in show_df.columns:
-        if col in ["M0", "GP", "GP TOTAL", "QTY", "TOTAL STOK"]:
-            show_df[col] = pd.to_numeric(show_df[col], errors="coerce").fillna(0).round(0).astype(int)
+    formatted_cols = ["M3", "M0", "GP", "GP TOTAL", "QTY", "TOTAL STOK"]
+    for col in formatted_cols:
+        if col in show_df.columns:
+            show_df[col] = show_df[col].apply(format_thousands_id)
 
     html = []
     html.append('<div class="main-fixed-wrap"><table class="main-fixed"><thead><tr>')
@@ -1499,26 +1508,45 @@ with st.container(border=True):
 
     render_sales_pivot_alert_table(sales_pivot_alerts)
 
+if "gp_products" not in st.session_state:
+    st.session_state["gp_products"] = st.session_state.get("stok_products", selected_products)
+if "top_gp_products" not in st.session_state:
+    st.session_state["top_gp_products"] = st.session_state.get("stok_products", selected_products)
+
 card_col1, card_col2 = st.columns(2)
 
 with card_col1:
     with st.container(border=True):
+        gp_product_filter = st.multiselect(
+            "Filter Product - SKU Dengan GP Besar",
+            product_options,
+            default=st.session_state.get("gp_products", st.session_state.get("stok_products", selected_products)),
+            key="gp_products_filter",
+        )
+        st.session_state["gp_products"] = gp_product_filter
         render_simple_card_table(
             build_sku_gp_besar_table(
                 sales_pivot=sales_pivot,
                 stock=stock,
-                selected_products=st.session_state.get("stok_products", selected_products),
+                selected_products=gp_product_filter,
             ),
             "SKU Dengan GP Besar"
         )
 
 with card_col2:
     with st.container(border=True):
+        top_gp_product_filter = st.multiselect(
+            "Filter Product - SKU Top GP",
+            product_options,
+            default=st.session_state.get("top_gp_products", st.session_state.get("stok_products", selected_products)),
+            key="top_gp_products_filter",
+        )
+        st.session_state["top_gp_products"] = top_gp_product_filter
         render_simple_card_table(
             build_sku_top_gp_table(
                 sales_pivot=sales_pivot,
                 stock=stock,
-                selected_products=st.session_state.get("stok_products", selected_products),
+                selected_products=top_gp_product_filter,
             ),
             "SKU Top GP"
         )
