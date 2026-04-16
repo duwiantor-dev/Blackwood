@@ -1534,43 +1534,63 @@ if "gp_products" not in st.session_state:
     st.session_state["gp_products"] = []
 if "top_gp_products" not in st.session_state:
     st.session_state["top_gp_products"] = []
+if "gp_cards_applied" not in st.session_state:
+    st.session_state["gp_cards_applied"] = False
 
 card_col1, card_col2 = st.columns(2)
 
 with card_col1:
     with st.container(border=True):
-        gp_product_filter = st.multiselect(
-            "Filter Product - SKU Dengan GP Besar",
-            product_options,
-            default=[],
-            key="gp_products_filter",
-        )
-        st.session_state["gp_products"] = gp_product_filter
-        render_simple_card_table(
-            build_sku_gp_besar_table(
-                sales_pivot=sales_pivot,
-                stock=stock,
-                selected_products=gp_product_filter,
-            ),
-            "SKU Dengan GP Besar"
-        )
+        with st.form("gp_besar_form"):
+            gp_product_filter = st.multiselect(
+                "Filter Product - SKU Dengan GP Besar",
+                product_options,
+                default=st.session_state.get("gp_products", []),
+                key="gp_products_filter",
+            )
+            process_gp_besar = st.form_submit_button("PROSES", use_container_width=True)
+
+        if process_gp_besar:
+            st.session_state["gp_products"] = gp_product_filter
+            st.session_state["gp_cards_applied"] = True
+
+        if st.session_state.get("gp_cards_applied"):
+            render_simple_card_table(
+                build_sku_gp_besar_table(
+                    sales_pivot=sales_pivot,
+                    stock=stock,
+                    selected_products=st.session_state.get("gp_products", []),
+                ),
+                "SKU Dengan GP Besar"
+            )
+        else:
+            st.info("Pilih filter product lalu klik PROSES.")
 
 with card_col2:
     with st.container(border=True):
-        top_gp_product_filter = st.multiselect(
-            "Filter Product - SKU Top GP",
-            product_options,
-            default=[],
-            key="top_gp_products_filter",
-        )
-        st.session_state["top_gp_products"] = top_gp_product_filter
-        render_simple_card_table(
-            build_sku_top_gp_table(
-                sales_pivot=sales_pivot,
-                stock=stock,
-                selected_products=top_gp_product_filter,
-            ),
-            "SKU Top GP"
-        )
+        with st.form("top_gp_form"):
+            top_gp_product_filter = st.multiselect(
+                "Filter Product - SKU Top GP",
+                product_options,
+                default=st.session_state.get("top_gp_products", []),
+                key="top_gp_products_filter",
+            )
+            process_top_gp = st.form_submit_button("PROSES", use_container_width=True)
+
+        if process_top_gp:
+            st.session_state["top_gp_products"] = top_gp_product_filter
+            st.session_state["gp_cards_applied"] = True
+
+        if st.session_state.get("gp_cards_applied"):
+            render_simple_card_table(
+                build_sku_top_gp_table(
+                    sales_pivot=sales_pivot,
+                    stock=stock,
+                    selected_products=st.session_state.get("top_gp_products", []),
+                ),
+                "SKU Top GP"
+            )
+        else:
+            st.info("Pilih filter product lalu klik PROSES.")
 
 st.markdown("<div style='height:120px;'></div>", unsafe_allow_html=True)
