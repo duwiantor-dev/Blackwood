@@ -865,31 +865,39 @@ def render_sales_pivot_alert_table(df: pd.DataFrame):
 
 
 def build_sku_gp_besar_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, selected_products=None) -> pd.DataFrame:
-    columns = ["KODE BARANG", "SPESIFIKASI", "PRODUCT", "M3", "M0", "GP", "TOTAL STOK"]
+    columns = ["KODE BARANG", "SPESIFIKASI", "PRODUCT", "M3", "M0", "GP", "STOK"]
     if sales_pivot.empty or stock.empty:
         return pd.DataFrame(columns=columns)
 
     sales_base = sales_pivot.copy()
     sales_base = sales_base[sales_base.get("COUNTRY", pd.Series(index=sales_base.index)).isin(["LAPTOP", "TELCO"])].copy()
-    sales_base["GP"] = to_num(sales_base.get("M3", np.nan)).fillna(0) - to_num(sales_base.get("M0", np.nan)).fillna(0)
+    sales_base["M3_VAL"] = to_num(sales_base.get("M3", np.nan)).fillna(0)
+    sales_base["M0_VAL"] = to_num(sales_base.get("M0", np.nan)).fillna(0)
+    sales_base["GP"] = sales_base["M3_VAL"] - sales_base["M0_VAL"]
     sales_base = sales_base[sales_base["GP"] > 0].copy()
 
     stock_base = stock.copy()
-    for col in ["KODEBARANG", "SPESIFIKASI", "PRODUCT", "BRAND", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05"]:
+    for col in ["KODEBARANG", "SPESIFIKASI", "PRODUCT", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05"]:
         if col not in stock_base.columns:
-            stock_base[col] = np.nan if col in ["SPESIFIKASI", "PRODUCT", "BRAND"] else 0
+            stock_base[col] = np.nan if col in ["SPESIFIKASI", "PRODUCT"] else 0
 
     if selected_products:
         stock_base = stock_base[stock_base["PRODUCT"].isin(selected_products)].copy()
 
-    stock_base["TOTAL STOK"] = (
+    stock_base["STOK"] = (
         to_num(stock_base.get("STOK_DIV03", 0)).fillna(0) +
         to_num(stock_base.get("STOK_DIV04", 0)).fillna(0) +
         to_num(stock_base.get("STOK_DIV05", 0)).fillna(0)
     )
 
+    stock_lookup = (
+        stock_base[["KODEBARANG", "SPESIFIKASI", "PRODUCT", "STOK"]]
+        .drop_duplicates(subset=["KODEBARANG"], keep="first")
+        .copy()
+    )
+
     merged = sales_base.merge(
-        stock_base[["KODEBARANG", "SPESIFIKASI", "PRODUCT", "BRAND", "TOTAL STOK"]],
+        stock_lookup,
         how="left",
         left_on="KODE BARANG",
         right_on="KODEBARANG"
@@ -897,14 +905,13 @@ def build_sku_gp_besar_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, sel
 
     merged["SPESIFIKASI_FINAL"] = merged["SPESIFIKASI_x"].fillna(merged.get("SPESIFIKASI_y"))
     merged["PRODUCT_FINAL"] = merged.get("PRODUCT")
-    merged["BRAND_FINAL"] = merged.get("BRAND")
-    merged["TOTAL STOK"] = to_num(merged["TOTAL STOK"]).fillna(0)
-    merged = merged[merged["TOTAL STOK"] > 0].copy()
+    merged["STOK"] = to_num(merged["STOK"]).fillna(0)
+    merged = merged[merged["STOK"] > 0].copy()
 
     out = (
         merged.groupby(["KODE BARANG", "SPESIFIKASI_FINAL", "PRODUCT_FINAL"], dropna=False, as_index=False)
-        .agg(M3=("M3", "max"), M0=("M0", "max"), GP=("GP", "max"), TOTAL_STOK=("TOTAL STOK", "max"))
-        .sort_values(["GP", "TOTAL_STOK", "KODE BARANG"], ascending=[False, False, True])
+        .agg(M3=("M3_VAL", "max"), M0=("M0_VAL", "max"), GP=("GP", "max"), STOK=("STOK", "max"))
+        .sort_values(["GP", "STOK", "KODE BARANG"], ascending=[False, False, True])
         .head(10)
         .reset_index(drop=True)
     )
@@ -912,52 +919,48 @@ def build_sku_gp_besar_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, sel
     out = out.rename(columns={
         "SPESIFIKASI_FINAL": "SPESIFIKASI",
         "PRODUCT_FINAL": "PRODUCT",
-        "TOTAL_STOK": "TOTAL STOK"
     })
     return out[columns]
 
 
 def build_sku_top_gp_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, selected_products=None) -> pd.DataFrame:
-    columns = ["KODE BARANG", "SPESIFIKASI", "PRODUCT", "BRAND", "M0", "QTY", "GP TOTAL", "TOTAL STOK"]
+    columns = ["KODE BARANG", "SPESIFIKASI", "PRODUCT", "M3", "M0", "QTY", "GP TOTAL"]
     if sales_pivot.empty or stock.empty:
         return pd.DataFrame(columns=columns)
 
     sales_base = sales_pivot.copy()
     sales_base = sales_base[sales_base.get("COUNTRY", pd.Series(index=sales_base.index)).isin(["LAPTOP", "TELCO"])].copy()
+    sales_base["M3_VAL"] = to_num(sales_base.get("M3", np.nan)).fillna(0)
+    sales_base["M0_VAL"] = to_num(sales_base.get("M0", np.nan)).fillna(0)
     sales_base["GP TOTAL"] = (
-        (to_num(sales_base.get("HARGA AKHIR", np.nan)).fillna(0) - to_num(sales_base.get("M0", np.nan)).fillna(0)) *
+        (to_num(sales_base.get("HARGA AKHIR", np.nan)).fillna(0) - sales_base["M0_VAL"]) *
         to_num(sales_base.get("QTY", 0)).fillna(0)
     )
     sales_base = sales_base[sales_base["GP TOTAL"] > 0].copy()
 
     stock_base = stock.copy()
-    for col in ["KODEBARANG", "SPESIFIKASI", "PRODUCT", "BRAND", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05"]:
+    for col in ["KODEBARANG", "PRODUCT"]:
         if col not in stock_base.columns:
-            stock_base[col] = np.nan if col in ["SPESIFIKASI", "PRODUCT", "BRAND"] else 0
+            stock_base[col] = np.nan
 
     if selected_products:
         stock_base = stock_base[stock_base["PRODUCT"].isin(selected_products)].copy()
 
-    stock_base["TOTAL STOK"] = (
-        to_num(stock_base.get("STOK_DIV03", 0)).fillna(0) +
-        to_num(stock_base.get("STOK_DIV04", 0)).fillna(0) +
-        to_num(stock_base.get("STOK_DIV05", 0)).fillna(0)
-    )
+    stock_lookup = stock_base[["KODEBARANG", "PRODUCT"]].drop_duplicates(subset=["KODEBARANG"], keep="first").copy()
 
     merged = sales_base.merge(
-        stock_base[["KODEBARANG", "SPESIFIKASI", "PRODUCT", "BRAND", "TOTAL STOK"]],
+        stock_lookup,
         how="left",
         left_on="KODE BARANG",
         right_on="KODEBARANG"
     )
 
-    merged["SPESIFIKASI_FINAL"] = merged["SPESIFIKASI_x"].fillna(merged.get("SPESIFIKASI_y"))
+    merged["SPESIFIKASI_FINAL"] = merged["SPESIFIKASI"]
     merged["PRODUCT_FINAL"] = merged.get("PRODUCT")
-    merged["BRAND_FINAL"] = merged.get("BRAND")
 
     out = (
-        merged.groupby(["KODE BARANG", "SPESIFIKASI_FINAL", "PRODUCT_FINAL", "BRAND_FINAL"], dropna=False, as_index=False)
-        .agg(M0=("M0", "max"), QTY=("QTY", "sum"), GP_TOTAL=("GP TOTAL", "sum"), TOTAL_STOK=("TOTAL STOK", "max"))
+        merged.groupby(["KODE BARANG", "SPESIFIKASI_FINAL", "PRODUCT_FINAL"], dropna=False, as_index=False)
+        .agg(M3=("M3_VAL", "max"), M0=("M0_VAL", "max"), QTY=("QTY", "sum"), GP_TOTAL=("GP TOTAL", "sum"))
         .sort_values(["GP_TOTAL", "QTY", "KODE BARANG"], ascending=[False, False, True])
         .head(10)
         .reset_index(drop=True)
@@ -966,9 +969,7 @@ def build_sku_top_gp_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, selec
     out = out.rename(columns={
         "SPESIFIKASI_FINAL": "SPESIFIKASI",
         "PRODUCT_FINAL": "PRODUCT",
-        "BRAND_FINAL": "BRAND",
         "GP_TOTAL": "GP TOTAL",
-        "TOTAL_STOK": "TOTAL STOK"
     })
     return out[columns]
 
@@ -980,7 +981,7 @@ def render_simple_card_table(df: pd.DataFrame, title: str):
         return
 
     show_df = df.copy()
-    formatted_cols = ["M3", "M0", "GP", "GP TOTAL", "QTY", "TOTAL STOK"]
+    formatted_cols = ["M3", "M0", "GP", "GP TOTAL", "QTY", "STOK"]
     for col in formatted_cols:
         if col in show_df.columns:
             show_df[col] = show_df[col].apply(format_thousands_id)
@@ -988,13 +989,19 @@ def render_simple_card_table(df: pd.DataFrame, title: str):
     html = []
     html.append('<div class="main-fixed-wrap"><table class="main-fixed"><thead><tr>')
     for col in show_df.columns:
-        html.append(f"<th>{col}</th>")
+        width_style = ""
+        if col in ["M3", "M0", "GP", "QTY", "STOK"]:
+            width_style = ' style="min-width:70px;max-width:70px;"'
+        html.append(f"<th{width_style}>{col}</th>")
     html.append("</tr></thead><tbody>")
 
     for _, row in show_df.iterrows():
         html.append("<tr>")
         for col in show_df.columns:
-            html.append(f"<td>{'' if pd.isna(row[col]) else row[col]}</td>")
+            width_style = ""
+            if col in ["M3", "M0", "GP", "QTY", "STOK"]:
+                width_style = ' style="min-width:70px;max-width:70px;"'
+            html.append(f"<td{width_style}>{'' if pd.isna(row[col]) else row[col]}</td>")
         html.append("</tr>")
 
     html.append("</tbody></table></div>")
