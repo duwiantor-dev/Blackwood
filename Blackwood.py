@@ -1122,37 +1122,36 @@ with upload_col3:
 
 all_required_uploaded = all([mplssr_file is not None, pricelist_file is not None, sales_pivot_file is not None])
 
-process_upload = st.button(
-    "PROSES FILE",
-    type="primary",
-    
-    disabled=not all_required_uploaded,
-)
-
 if not all_required_uploaded:
-    st.info("Silakan upload MPLSSR, Pricelist, dan Penjualan dulu, lalu klik PROSES FILE.")
-elif not process_upload and "processed_data" not in st.session_state:
-    st.info("Semua file sudah di-upload. Klik PROSES FILE untuk generate dashboard.")
+    st.info("Silakan upload MPLSSR, Pricelist, dan Penjualan.")
 st.markdown('</div>', unsafe_allow_html=True)
 
-if process_upload:
-    try:
-        sales = load_mplssr(mplssr_file)
-        stock = load_pricelist(pricelist_file)
-        master = build_master(sales, stock)
-        pricelist_wh, warehouse_stock_cols = load_pricelist_with_warehouses(pricelist_file)
-        sales_pivot = load_sales_pivot(sales_pivot_file)
-        st.session_state["processed_data"] = {
-            "sales": sales,
-            "stock": stock,
-            "master": master,
-            "pricelist_wh": pricelist_wh,
-            "warehouse_stock_cols": warehouse_stock_cols,
-            "sales_pivot": sales_pivot,
-        }
-    except Exception as e:
-        st.error(f"Gagal membaca file: {e}")
-        st.stop()
+if all_required_uploaded:
+    current_upload_signature = (
+        getattr(mplssr_file, "name", None),
+        getattr(pricelist_file, "name", None),
+        getattr(sales_pivot_file, "name", None),
+    )
+
+    if st.session_state.get("processed_upload_signature") != current_upload_signature:
+        try:
+            sales = load_mplssr(mplssr_file)
+            stock = load_pricelist(pricelist_file)
+            master = build_master(sales, stock)
+            pricelist_wh, warehouse_stock_cols = load_pricelist_with_warehouses(pricelist_file)
+            sales_pivot = load_sales_pivot(sales_pivot_file)
+            st.session_state["processed_data"] = {
+                "sales": sales,
+                "stock": stock,
+                "master": master,
+                "pricelist_wh": pricelist_wh,
+                "warehouse_stock_cols": warehouse_stock_cols,
+                "sales_pivot": sales_pivot,
+            }
+            st.session_state["processed_upload_signature"] = current_upload_signature
+        except Exception as e:
+            st.error(f"Gagal membaca file: {e}")
+            st.stop()
 
 if "processed_data" not in st.session_state:
     st.stop()
