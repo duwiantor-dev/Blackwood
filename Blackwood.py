@@ -1535,7 +1535,7 @@ if "gp_products" not in st.session_state:
 if "top_gp_products" not in st.session_state:
     st.session_state["top_gp_products"] = default_product.copy()
 if "gp_cards_applied" not in st.session_state:
-    st.session_state["gp_cards_applied"] = False
+    st.session_state["gp_cards_applied"] = True
 
 card_col1, card_col2 = st.columns(2)
 
