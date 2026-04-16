@@ -932,7 +932,7 @@ def build_sku_gp_besar_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, sel
         (to_num(out["STOK"]).fillna(0) > 0)
     ].copy()
 
-    out = out.sort_values(["GP", "STOK", "KODE BARANG"], ascending=[False, False, True]).head(10).reset_index(drop=True)
+    out = out.sort_values(["GP", "STOK", "KODE BARANG"], ascending=[False, False, True]).head(50).reset_index(drop=True)
     return out[columns]
 
 
@@ -975,7 +975,7 @@ def build_sku_top_gp_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, selec
         merged.groupby(["KODE BARANG", "SPESIFIKASI_FINAL", "PRODUCT_FINAL"], dropna=False, as_index=False)
         .agg(M3=("M3_VAL", "max"), M0=("M0_VAL", "max"), QTY=("QTY", "sum"), GP_TOTAL=("GP TOTAL", "sum"))
         .sort_values(["GP_TOTAL", "QTY", "KODE BARANG"], ascending=[False, False, True])
-        .head(10)
+        .head(50)
         .reset_index(drop=True)
     )
 
@@ -1065,7 +1065,7 @@ def build_brand_table(df, period, comparison_division_label="03 OLP"):
             brand[div] = 0
     brand = brand[["BRAND", "DIV03", "DIV04", "DIV05"]].copy()
     brand["TOTAL"] = brand[["DIV03", "DIV04", "DIV05"]].sum(axis=1)
-    brand = brand.sort_values(["TOTAL", "BRAND"], ascending=[False, True]).head(10).drop(columns=["TOTAL"])
+    brand = brand.sort_values(["TOTAL", "BRAND"], ascending=[False, True]).head(50).drop(columns=["TOTAL"])
     brand.columns = ["BRAND", "03 OLP", "04 MOD", "05 OLR"]
 
     compare_col = comparison_division_label if comparison_division_label in ["03 OLP", "04 MOD"] else "03 OLP"
@@ -1531,9 +1531,9 @@ with st.container(border=True):
     render_sales_pivot_alert_table(sales_pivot_alerts)
 
 if "gp_products" not in st.session_state:
-    st.session_state["gp_products"] = st.session_state.get("stok_products", selected_products)
+    st.session_state["gp_products"] = []
 if "top_gp_products" not in st.session_state:
-    st.session_state["top_gp_products"] = st.session_state.get("stok_products", selected_products)
+    st.session_state["top_gp_products"] = []
 
 card_col1, card_col2 = st.columns(2)
 
@@ -1542,7 +1542,7 @@ with card_col1:
         gp_product_filter = st.multiselect(
             "Filter Product - SKU Dengan GP Besar",
             product_options,
-            default=st.session_state.get("gp_products", st.session_state.get("stok_products", selected_products)),
+            default=[],
             key="gp_products_filter",
         )
         st.session_state["gp_products"] = gp_product_filter
@@ -1560,7 +1560,7 @@ with card_col2:
         top_gp_product_filter = st.multiselect(
             "Filter Product - SKU Top GP",
             product_options,
-            default=st.session_state.get("top_gp_products", st.session_state.get("stok_products", selected_products)),
+            default=[],
             key="top_gp_products_filter",
         )
         st.session_state["top_gp_products"] = top_gp_product_filter
