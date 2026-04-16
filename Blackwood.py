@@ -1116,8 +1116,8 @@ with upload_col2:
     st.caption("200MB per file • XLSX, XLS")
 
 with upload_col3:
-    st.markdown("**Upload SALES PIVOT**")
-    sales_pivot_file = st.file_uploader("Upload Sales Pivot", type=["xlsx", "xls"], key="upload_sales_pivot_main", label_visibility="collapsed")
+    st.markdown("**Upload Penjualan**")
+    sales_pivot_file = st.file_uploader("Upload Penjualan", type=["xlsx", "xls"], key="upload_sales_pivot_main", label_visibility="collapsed")
     st.caption("200MB per file • XLSX, XLS")
 
 all_required_uploaded = all([mplssr_file is not None, pricelist_file is not None, sales_pivot_file is not None])
@@ -1130,7 +1130,7 @@ process_upload = st.button(
 )
 
 if not all_required_uploaded:
-    st.info("Silakan upload MPLSSR, Pricelist, dan SALES PIVOT dulu, lalu klik PROSES FILE.")
+    st.info("Silakan upload MPLSSR, Pricelist, dan Penjualan dulu, lalu klik PROSES FILE.")
 elif not process_upload and "processed_data" not in st.session_state:
     st.info("Semua file sudah di-upload. Klik PROSES FILE untuk generate dashboard.")
 st.markdown('</div>', unsafe_allow_html=True)
