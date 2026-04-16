@@ -1531,9 +1531,9 @@ with st.container(border=True):
     render_sales_pivot_alert_table(sales_pivot_alerts)
 
 if "gp_products" not in st.session_state:
-    st.session_state["gp_products"] = []
+    st.session_state["gp_products"] = default_product.copy()
 if "top_gp_products" not in st.session_state:
-    st.session_state["top_gp_products"] = []
+    st.session_state["top_gp_products"] = default_product.copy()
 if "gp_cards_applied" not in st.session_state:
     st.session_state["gp_cards_applied"] = False
 
