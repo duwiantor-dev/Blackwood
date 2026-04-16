@@ -177,6 +177,15 @@ def format_thousands_id(value):
     except Exception:
         return ""
 
+def format_units_id(value):
+    try:
+        num = pd.to_numeric(value, errors="coerce")
+        if pd.isna(num):
+            return ""
+        return f"{int(round(float(num))):,}".replace(",", ".")
+    except Exception:
+        return ""
+
 def price_segment(price: float) -> str:
     if pd.isna(price):
         return "UNKNOWN"
@@ -866,60 +875,56 @@ def render_sales_pivot_alert_table(df: pd.DataFrame):
 
 def build_sku_gp_besar_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, selected_products=None) -> pd.DataFrame:
     columns = ["KODE BARANG", "SPESIFIKASI", "PRODUCT", "M3", "M0", "GP", "STOK"]
-    if sales_pivot.empty or stock.empty:
+    if stock.empty:
         return pd.DataFrame(columns=columns)
 
-    sales_base = sales_pivot.copy()
-    sales_base = sales_base[sales_base.get("COUNTRY", pd.Series(index=sales_base.index)).isin(["LAPTOP", "TELCO"])].copy()
-    sales_base["M3_VAL"] = to_num(sales_base.get("M3", np.nan)).fillna(0)
-    sales_base["M0_VAL"] = to_num(sales_base.get("M0", np.nan)).fillna(0)
-    sales_base["GP"] = sales_base["M3_VAL"] - sales_base["M0_VAL"]
-    sales_base = sales_base[sales_base["GP"] > 0].copy()
-
     stock_base = stock.copy()
-    for col in ["KODEBARANG", "SPESIFIKASI", "PRODUCT", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05"]:
+    for col in ["KODEBARANG", "SPESIFIKASI", "PRODUCT", "PRICE", "STOK_DIV03", "STOK_DIV04", "STOK_DIV05"]:
         if col not in stock_base.columns:
             stock_base[col] = np.nan if col in ["SPESIFIKASI", "PRODUCT"] else 0
 
     if selected_products:
         stock_base = stock_base[stock_base["PRODUCT"].isin(selected_products)].copy()
 
+    stock_base["M3_VAL"] = to_num(stock_base.get("PRICE", np.nan)).fillna(0)
+    stock_base["M0_VAL"] = 0
+    if not sales_pivot.empty and "KODE BARANG" in sales_pivot.columns:
+        sales_m0_lookup = sales_pivot.copy()
+        sales_m0_lookup["M0_VAL"] = to_num(sales_m0_lookup.get("M0", np.nan)).fillna(0)
+        sales_m0_lookup["KODE BARANG"] = normalize_text(sales_m0_lookup["KODE BARANG"])
+        sales_m0_lookup = (
+            sales_m0_lookup.groupby("KODE BARANG", as_index=False)
+            .agg(M0_VAL=("M0_VAL", "max"))
+        )
+        stock_base = stock_base.merge(
+            sales_m0_lookup,
+            how="left",
+            left_on="KODEBARANG",
+            right_on="KODE BARANG",
+            suffixes=("", "_sales")
+        )
+        stock_base["M0_VAL"] = to_num(stock_base.get("M0_VAL_sales", stock_base.get("M0_VAL"))).fillna(
+            to_num(stock_base.get("M0_VAL")).fillna(0)
+        )
+        drop_cols = [c for c in ["KODE BARANG", "M0_VAL_sales"] if c in stock_base.columns]
+        if drop_cols:
+            stock_base = stock_base.drop(columns=drop_cols)
+
     stock_base["STOK"] = (
         to_num(stock_base.get("STOK_DIV03", 0)).fillna(0) +
         to_num(stock_base.get("STOK_DIV04", 0)).fillna(0) +
         to_num(stock_base.get("STOK_DIV05", 0)).fillna(0)
     )
+    stock_base["GP"] = stock_base["M3_VAL"] - stock_base["M0_VAL"]
 
-    stock_lookup = (
-        stock_base[["KODEBARANG", "SPESIFIKASI", "PRODUCT", "STOK"]]
-        .drop_duplicates(subset=["KODEBARANG"], keep="first")
-        .copy()
-    )
+    stock_base["KODE BARANG"] = normalize_text(stock_base["KODEBARANG"])
+    stock_base["SPESIFIKASI"] = normalize_text(stock_base["SPESIFIKASI"])
+    stock_base["PRODUCT"] = normalize_text(stock_base["PRODUCT"])
 
-    merged = sales_base.merge(
-        stock_lookup,
-        how="left",
-        left_on="KODE BARANG",
-        right_on="KODEBARANG"
-    )
-
-    merged["SPESIFIKASI_FINAL"] = merged["SPESIFIKASI_x"].fillna(merged.get("SPESIFIKASI_y"))
-    merged["PRODUCT_FINAL"] = merged.get("PRODUCT")
-    merged["STOK"] = to_num(merged["STOK"]).fillna(0)
-    merged = merged[merged["STOK"] > 0].copy()
-
-    out = (
-        merged.groupby(["KODE BARANG", "SPESIFIKASI_FINAL", "PRODUCT_FINAL"], dropna=False, as_index=False)
-        .agg(M3=("M3_VAL", "max"), M0=("M0_VAL", "max"), GP=("GP", "max"), STOK=("STOK", "max"))
-        .sort_values(["GP", "STOK", "KODE BARANG"], ascending=[False, False, True])
-        .head(10)
-        .reset_index(drop=True)
-    )
-
-    out = out.rename(columns={
-        "SPESIFIKASI_FINAL": "SPESIFIKASI",
-        "PRODUCT_FINAL": "PRODUCT",
-    })
+    out = stock_base[["KODE BARANG", "SPESIFIKASI", "PRODUCT", "M3_VAL", "M0_VAL", "GP", "STOK"]].copy()
+    out = out.rename(columns={"M3_VAL": "M3", "M0_VAL": "M0"})
+    out = out[(to_num(out["GP"]).fillna(0) > 0) & (to_num(out["STOK"]).fillna(0) > 0)].copy()
+    out = out.sort_values(["GP", "STOK", "KODE BARANG"], ascending=[False, False, True]).head(10).reset_index(drop=True)
     return out[columns]
 
 
@@ -981,10 +986,12 @@ def render_simple_card_table(df: pd.DataFrame, title: str):
         return
 
     show_df = df.copy()
-    formatted_cols = ["M3", "M0", "GP", "GP TOTAL", "QTY", "STOK"]
-    for col in formatted_cols:
+    for col in ["M3", "M0", "GP", "GP TOTAL"]:
         if col in show_df.columns:
             show_df[col] = show_df[col].apply(format_thousands_id)
+    for col in ["QTY", "STOK"]:
+        if col in show_df.columns:
+            show_df[col] = show_df[col].apply(format_units_id)
 
     html = []
     html.append('<div class="main-fixed-wrap"><table class="main-fixed"><thead><tr>')
