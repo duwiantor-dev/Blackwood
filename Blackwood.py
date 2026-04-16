@@ -1375,7 +1375,7 @@ with st.form("unified_filter_form"):
         comparison_division = st.selectbox("Perbandingan", ["03 OLP", "04 MOD", "05 OLR"], index=0)
     with fcol6:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        apply_filter = st.form_submit_button("PROSES", use_container_width=True)
+        apply_filter = st.form_submit_button("PROSES")
 st.markdown('</div>', unsafe_allow_html=True)
 
 filtered = master.copy()
@@ -1548,7 +1548,7 @@ with card_col1:
                 default=st.session_state.get("gp_products", []),
                 key="gp_products_filter",
             )
-            process_gp_besar = st.form_submit_button("PROSES", use_container_width=True)
+            process_gp_besar = st.form_submit_button("PROSES")
 
         if process_gp_besar:
             st.session_state["gp_products"] = gp_product_filter
@@ -1575,7 +1575,7 @@ with card_col2:
                 default=st.session_state.get("top_gp_products", []),
                 key="top_gp_products_filter",
             )
-            process_top_gp = st.form_submit_button("PROSES", use_container_width=True)
+            process_top_gp = st.form_submit_button("PROSES")
 
         if process_top_gp:
             st.session_state["top_gp_products"] = top_gp_product_filter
