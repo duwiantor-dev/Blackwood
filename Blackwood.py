@@ -1542,13 +1542,17 @@ card_col1, card_col2 = st.columns(2)
 with card_col1:
     with st.container(border=True):
         with st.form("gp_besar_form"):
-            gp_product_filter = st.multiselect(
-                "Filter Product - SKU Dengan GP Besar",
-                product_options,
-                default=st.session_state.get("gp_products", []),
-                key="gp_products_filter",
-            )
-            process_gp_besar = st.form_submit_button("PROSES")
+            gp_filter_col, gp_button_col = st.columns([4, 1])
+            with gp_filter_col:
+                gp_product_filter = st.multiselect(
+                    "Filter Product - SKU Dengan GP Besar",
+                    product_options,
+                    default=st.session_state.get("gp_products", []),
+                    key="gp_products_filter",
+                )
+            with gp_button_col:
+                st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
+                process_gp_besar = st.form_submit_button("PROSES")
 
         if process_gp_besar:
             st.session_state["gp_products"] = gp_product_filter
@@ -1569,13 +1573,17 @@ with card_col1:
 with card_col2:
     with st.container(border=True):
         with st.form("top_gp_form"):
-            top_gp_product_filter = st.multiselect(
-                "Filter Product - SKU Top GP",
-                product_options,
-                default=st.session_state.get("top_gp_products", []),
-                key="top_gp_products_filter",
-            )
-            process_top_gp = st.form_submit_button("PROSES")
+            top_filter_col, top_button_col = st.columns([4, 1])
+            with top_filter_col:
+                top_gp_product_filter = st.multiselect(
+                    "Filter Product - SKU Top GP",
+                    product_options,
+                    default=st.session_state.get("top_gp_products", []),
+                    key="top_gp_products_filter",
+                )
+            with top_button_col:
+                st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
+                process_top_gp = st.form_submit_button("PROSES")
 
         if process_top_gp:
             st.session_state["top_gp_products"] = top_gp_product_filter
