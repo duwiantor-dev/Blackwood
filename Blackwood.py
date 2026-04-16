@@ -972,13 +972,30 @@ def build_sku_top_gp_table(sales_pivot: pd.DataFrame, stock: pd.DataFrame, selec
     sales_base = sales_base[(sales_base["KODE BARANG"].notna()) & (sales_base["PRODUCT"].notna())].copy()
     sales_base = sales_base[sales_base["GP_M0_VAL"] > 0].copy()
 
-    out = (
-        sales_base.groupby(["KODE BARANG", "SPESIFIKASI", "PRODUCT"], dropna=False, as_index=False)
-        .agg(M3=("M3_VAL", "max"), M0=("M0_VAL", "max"), QTY=("QTY", "sum"), **{"GP M0": ("GP_M0_VAL", "sum")})
-        .sort_values(["GP M0", "QTY", "KODE BARANG"], ascending=[False, False, True])
-        .reset_index(drop=True)
+    if sales_base.empty:
+        return pd.DataFrame(columns=columns)
+
+    # Samakan dengan Pivot Excel:
+    # - filter PRODUCT dari file sales
+    # - row label berdasarkan KODE BARANG
+    # - value adalah SUM dari kolom GP M0 asli di file sales
+    # Kolom lain diambil representatif per KODE BARANG agar tampilan card tetap informatif.
+    meta = (
+        sales_base.sort_values(["KODE BARANG", "QTY", "GP_M0_VAL"], ascending=[True, False, False])
+        .drop_duplicates(subset=["KODE BARANG"], keep="first")
+        [["KODE BARANG", "SPESIFIKASI", "PRODUCT", "M3_VAL", "M0_VAL"]]
+        .copy()
     )
 
+    pivot_like = (
+        sales_base.groupby(["KODE BARANG"], dropna=False, as_index=False)
+        .agg(QTY=("QTY", "sum"), **{"GP M0": ("GP_M0_VAL", "sum")})
+    )
+
+    out = pivot_like.merge(meta, how="left", on="KODE BARANG")
+    out = out.rename(columns={"M3_VAL": "M3", "M0_VAL": "M0"})
+    out = out[["KODE BARANG", "SPESIFIKASI", "PRODUCT", "M3", "M0", "QTY", "GP M0"]]
+    out = out.sort_values(["GP M0", "QTY", "KODE BARANG"], ascending=[False, False, True]).reset_index(drop=True)
     return out[columns]
 
 
